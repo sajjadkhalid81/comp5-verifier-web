@@ -22,9 +22,54 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "comp5-verify-2026")
 
-# ── In-memory job store (resets on dyno restart — fine for free tier) ─────────
-jobs = {}   # job_id → { status, progress, results, error }
+# ── Job store — file-based so jobs survive server restarts ────────────────────
+import pickle, hashlib
+JOBS_DIR = "/tmp/comp5_jobs"
+os.makedirs(JOBS_DIR, exist_ok=True)
 jobs_lock = threading.Lock()
+
+def _job_path(job_id):
+    return os.path.join(JOBS_DIR, f"{job_id}.pkl")
+
+def _save_job(job_id, job):
+    try:
+        with open(_job_path(job_id), "wb") as f:
+            pickle.dump(job, f)
+    except Exception:
+        pass
+
+def _load_job(job_id):
+    try:
+        p = _job_path(job_id)
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                return pickle.load(f)
+    except Exception:
+        pass
+    return None
+
+def _get_job(job_id):
+    return _load_job(job_id)
+
+def _update_job(job_id, updates):
+    with jobs_lock:
+        job = _load_job(job_id) or {}
+        job.update(updates)
+        _save_job(job_id, job)
+    return job
+
+def _append_log(job_id, msg):
+    with jobs_lock:
+        job = _load_job(job_id) or {}
+        job.setdefault("log", []).append(msg)
+        _save_job(job_id, job)
+
+def _append_result(job_id, res):
+    with jobs_lock:
+        job = _load_job(job_id) or {}
+        job.setdefault("results", []).append(res)
+        job["progress"] = len(job["results"])
+        _save_job(job_id, job)
 
 ALLOWED_EXTENSIONS = {".zip", ".xlsx", ".xls"}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024   # 500 MB
@@ -88,19 +133,18 @@ def start_verification():
     zip_name    = secure_filename(zip_file.filename)
     excel_name  = secure_filename(excel_file.filename)
 
-    # Create job
+    # Create job — saved to disk immediately so it survives restarts
     job_id = str(uuid.uuid4())
-    with jobs_lock:
-        jobs[job_id] = {
-            "status":   "running",
-            "progress": 0,
-            "total":    0,
-            "log":      [],
-            "results":  [],
-            "zip_name": zip_name,
-            "excel_name": excel_name,
-            "started":  datetime.utcnow().isoformat(),
-        }
+    _update_job(job_id, {
+        "status":     "running",
+        "progress":   0,
+        "total":      0,
+        "log":        [],
+        "results":    [],
+        "zip_name":   zip_name,
+        "excel_name": excel_name,
+        "started":    datetime.utcnow().isoformat(),
+    })
 
     # Run verification in background thread
     thread = threading.Thread(
@@ -117,8 +161,7 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
     """Background worker — runs verification and updates jobs dict."""
 
     def log(msg):
-        with jobs_lock:
-            jobs[job_id]["log"].append(msg)
+        _append_log(job_id, msg)
 
     try:
         log("Parsing Excel transmittal...")
@@ -140,8 +183,7 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
         missing = [r for r in transmittal if re.sub(r"[\s\-_]","",r["cpyNo"]).upper() not in {_cpy(s) for s,_ in pdf_entries}]
 
         total = len(matched) + len(missing)
-        with jobs_lock:
-            jobs[job_id]["total"] = total
+        _update_job(job_id, {"total": total})
 
         results = []
         for idx, (short, pdf_bytes_item, row) in enumerate(matched):
@@ -160,12 +202,10 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
                     "classificationMissingPages": [], "docNoFromPdf": "",
                     "cpyNoFromPdf": "", "revFromPdf": "",
                 }
-            results.append(res)
+            _append_result(job_id, res)
             ov = res.get("overallResult","FAIL")
             log(f"  → {ov}")
-            with jobs_lock:
-                jobs[job_id]["progress"] = idx + 1
-                jobs[job_id]["results"] = results[:]
+            results.append(res)
 
         for row in missing:
             res = {
@@ -191,35 +231,29 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
         }
         log(f"Complete: {summary['passed']} PASS | {summary['failed']} FAIL | {summary['warned']} WARN")
 
-        with jobs_lock:
-            jobs[job_id].update({
-                "status":  "done",
-                "results": results,
-                "summary": summary,
-            })
+        _update_job(job_id, {
+            "status":  "done",
+            "summary": summary,
+        })
 
     except Exception as e:
         log(f"FATAL ERROR: {e}")
-        with jobs_lock:
-            jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"]  = str(e)
+        _update_job(job_id, {"status": "error", "error": str(e)})
 
 
 @app.route("/api/job/<job_id>")
 def job_status(job_id):
     """Poll job status + incremental results."""
-    with jobs_lock:
-        job = jobs.get(job_id)
+    job = _get_job(job_id)
     if not job:
-        return jsonify({"error": "Job not found"}), 404
+        return jsonify({"error": "Job not found — server may have restarted. Please run a new verification."}), 404
     return jsonify(job)
 
 
 @app.route("/api/job/<job_id>/log")
 def job_log(job_id):
     """Return log lines for a job (for live log panel)."""
-    with jobs_lock:
-        job = jobs.get(job_id)
+    job = _get_job(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify({"log": job.get("log", [])})
@@ -228,10 +262,9 @@ def job_log(job_id):
 @app.route("/api/job/<job_id>/download")
 def download_report(job_id):
     """Download Excel verification report for a completed job."""
-    with jobs_lock:
-        job = jobs.get(job_id)
+    job = _get_job(job_id)
     if not job:
-        return jsonify({"error": "Job not found"}), 404
+        return jsonify({"error": "Job not found — server restarted. Please run verification again."}), 404
     # Allow download if status is done OR if results exist (handles timing edge cases)
     has_results = len(job.get("results", [])) > 0
     if job["status"] not in ("done",) and not has_results:
@@ -245,9 +278,16 @@ def download_report(job_id):
         buf = BytesIO(excel_bytes)
         buf.seek(0)
         name = f"Verification_Report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
-        return send_file(buf, download_name=name,
-                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                         as_attachment=True)
+        response = send_file(
+            buf,
+            download_name=name,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True
+        )
+        # Ensure CORS headers allow download from browser
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Content-Disposition"] = f'attachment; filename="{name}"'
+        return response
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
