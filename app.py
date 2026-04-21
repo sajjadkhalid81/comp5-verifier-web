@@ -27,7 +27,7 @@ jobs = {}   # job_id → { status, progress, results, error }
 jobs_lock = threading.Lock()
 
 ALLOWED_EXTENSIONS = {".zip", ".xlsx", ".xls"}
-MAX_CONTENT_LENGTH = 150 * 1024 * 1024   # 150 MB
+MAX_CONTENT_LENGTH = 500 * 1024 * 1024   # 500 MB
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
 # ── Import core verification functions ────────────────────────────────────────
@@ -44,6 +44,9 @@ try:
 except ImportError as e:
     VERIFIER_OK = False
     IMPORT_ERROR = str(e)
+except Exception as e:
+    VERIFIER_OK = False
+    IMPORT_ERROR = str(e)
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -54,11 +57,14 @@ def index():
 
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "ok",
+    info = {
+        "status": "ok" if VERIFIER_OK else "degraded",
         "verifier": VERIFIER_OK,
-        "time": datetime.utcnow().isoformat()
-    })
+        "time": datetime.utcnow().isoformat(),
+    }
+    if not VERIFIER_OK:
+        info["error"] = IMPORT_ERROR
+    return jsonify(info)
 
 
 @app.route("/api/verify", methods=["POST"])
