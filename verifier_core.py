@@ -169,6 +169,18 @@ def load_transmittal_excel(excel_source):
         if doc_no.lower() in ("document no.", "doc no") or \
            cpy_no.lower() in ("client doc. no.", "cpy no"):
             continue
+
+        # Skip rows where Doc No. looks like a date (Excel date cell misread)
+        # e.g. "2026-04-19 00:00:00" — happens when Excel has a date in that column
+        _date_pat = re.compile(r"^\d{4}-\d{2}-\d{2}(\s|T|$)")
+        if _date_pat.match(doc_no) or _date_pat.match(cpy_no):
+            continue
+
+        # Skip rows with no valid drawing number pattern in either column
+        _cpy_valid = re.compile(r"\d{3}-\d{2}-[A-Za-z]+-[A-Za-z]+-\d{4,5}")
+        _doc_valid = re.compile(r"\d{4,6}-[A-Za-z]-[A-Za-z0-9]+-\d+-[A-Za-z]+-[A-Za-z]+-[A-Za-z]+-\d+-\d+")
+        if not _cpy_valid.search(cpy_no) and not _doc_valid.search(doc_no):
+            continue
         sr_counter += 1
         try:
             sr = int(float(str(row[0]).strip())) if row[0] else sr_counter
