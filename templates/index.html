@@ -201,9 +201,36 @@ async function startVerification() {
   fd.append('zip',   zipFile);
   fd.append('excel', xlsxFile);
 
-  const resp = await fetch('/api/verify', { method:'POST', body: fd });
-  if (!resp.ok) { alert('Upload failed: ' + await resp.text()); return; }
-  const data = await resp.json();
+  let resp, data;
+  try {
+    resp = await fetch('/api/verify', { method:'POST', body: fd });
+    const text = await resp.text();
+    try {
+      data = JSON.parse(text);
+    } catch(e) {
+      // Server returned HTML error page — show friendly message
+      document.getElementById('run-btn').disabled = false;
+      document.getElementById('progress-section').style.display = 'none';
+      const errMsg = resp.status === 413
+        ? 'File too large! ZIP file exceeds 150MB limit.\nPlease split into smaller batches.'
+        : resp.status === 500
+        ? 'Server error starting verification.\nCheck Render logs for details.'
+        : `Upload failed (HTTP ${resp.status}).\nPlease try again.`;
+      alert(errMsg);
+      return;
+    }
+    if (!resp.ok) { 
+      document.getElementById('run-btn').disabled = false;
+      document.getElementById('progress-section').style.display = 'none';
+      alert('Error: ' + (data.error || 'Unknown error')); 
+      return; 
+    }
+  } catch(networkErr) {
+    document.getElementById('run-btn').disabled = false;
+    document.getElementById('progress-section').style.display = 'none';
+    alert('Network error: Cannot reach server.\nThe server may be waking up (free tier) — wait 30 seconds and try again.');
+    return;
+  }
   currentJobId = data.job_id;
   pollTimer = setInterval(poll, 1200);
 }
@@ -274,13 +301,20 @@ function makeRow(r) {
     <td>${pill(r.prevRevResult||'?')}</td>
     <td>${pill(r.titleMatch||'?')}</td>
     <td>${pill(ov)}</td>
-    <td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;" title="${r.issues||''}">${r.issues||''}</td>
+    <td style="color:${(r.issues&&r.issues!='None')?'#f85149':'var(--muted)'};max-width:300px;overflow:hidden;text-overflow:ellipsis;font-size:11px;" title="${r.issues||''}">${r.issues||'None'}</td>
   `;
   return tr;
 }
 
 async function downloadReport() {
   if (!currentJobId) return;
+  // Check job is actually done before downloading
+  const resp = await fetch('/api/job/' + currentJobId);
+  const job  = await resp.json();
+  if (job.status !== 'done') {
+    alert('Verification still running. Please wait for it to complete.');
+    return;
+  }
   window.location = '/api/job/' + currentJobId + '/download';
 }
 
