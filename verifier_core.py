@@ -331,31 +331,65 @@ def _error_result(filename, row, error_msg):
 
 
 def _check_doc_no(page, page_type, excel_val):
+    # Try coordinate extraction first (works for standard A1)
     raw = extract_text_at(page, COORDS["A1"]["doc_no"])
     m = DOC_NO_PATTERN.search(raw) if raw else None
-    pdf_val = m.group(0) if m else (raw.strip() if raw else "")
+    pdf_val = m.group(0) if m else ""
+
+    # Fallback: search full page text (works for rotated/non-A1 drawings)
+    if not pdf_val:
+        full = page.get_text("text").replace("\x1f", " ")
+        # Look for "CONTRACTOR DRAWING NO:" label then the number after it
+        m2 = re.search(
+            r"CONTRACTOR\s+DRAWING\s+NO[:\s]+(" + DOC_NO_PATTERN.pattern + r")",
+            full, re.IGNORECASE
+        )
+        if not m2:
+            m2 = DOC_NO_PATTERN.search(full)
+        pdf_val = m2.group(1) if (m2 and m2.lastindex) else (m2.group(0) if m2 else "")
+
     if pdf_val:
         if not excel_val:
             return "PASS", f"✓ {pdf_val}", pdf_val
         if doc_no_match(pdf_val, excel_val):
             return "PASS", f"✓ {pdf_val}", pdf_val
         return "FAIL", pdf_val, pdf_val
-    return "PASS", (f"✓ {excel_val}  |  Remark: vector font"), excel_val
+    return "PASS", f"✓ {excel_val}  |  Remark: vector font — verify manually", excel_val
 
 
 def _check_cpy_no(page, page_type, filename, excel_val):
     fname_cpy = re.sub(r"_[A-Z]\.pdf$", "", filename, flags=re.IGNORECASE)
     fname_cpy = re.sub(r"\.pdf$", "", fname_cpy, flags=re.IGNORECASE)
+
+    # Try coordinate extraction first (standard A1)
     raw = extract_text_at(page, COORDS["A1"]["cpy_no"])
+    pdf_val = ""
     if raw:
         m = CPY_RE.search(raw.replace("\n", " "))
         pdf_val = m.group(1) if m else raw.split("\n")[0].strip()
+
+    # Fallback: search full page text (rotated/non-A1 drawings)
+    if not pdf_val:
+        full = page.get_text("text").replace("\x1f", " ")
+        # Look for CPY pattern near "DRAWING NO." label
+        m2 = CPY_RE.search(full)
+        if m2:
+            pdf_val = m2.group(1)
+
+    if pdf_val:
+        if not excel_val:
+            return "WARN", pdf_val, pdf_val
         if cpy_no_match(pdf_val, excel_val):
             return "PASS", f"✓ {pdf_val}", pdf_val
         return "FAIL", pdf_val, pdf_val
-    if fname_cpy and cpy_no_match(fname_cpy, excel_val):
-        return "PASS", f"✓ {fname_cpy} (filename)", fname_cpy
-    return "PASS", f"✓ {excel_val}  |  Remark: vector font", excel_val
+
+    # Last resort: filename
+    if fname_cpy and excel_val:
+        if cpy_no_match(fname_cpy, excel_val):
+            return "PASS", f"✓ {fname_cpy} (filename)", fname_cpy
+        return "FAIL", fname_cpy, fname_cpy
+
+    return "PASS", f"✓ {excel_val}  |  Remark: vector font — verify manually", excel_val
 
 
 def _check_revision(page, page_type, filename, excel_val):
@@ -371,44 +405,68 @@ def _check_revision(page, page_type, filename, excel_val):
     return "WARN", raw or "?", raw
 
 
+def _count_digital_sigs(page):
+    """Count digital signatures from PDF text (DN: CN= pattern)."""
+    text = page.get_text("text").replace("\x1f", " ")
+    # Each digital sig has a DN: CN= entry
+    dns = re.findall(r"DN:\s*CN=([^,\n]+)", text, re.IGNORECASE)
+    # Also count "Digitally signed by" occurrences
+    signed_by = len(re.findall(r"digitally\s+signed\s+by", text, re.IGNORECASE))
+    return max(len(dns), signed_by)
+
+
 def _check_signatures(doc, page_type):
     """
-    Render ONLY the signature strip at 150 DPI using numpy.
-    Same quality as desktop, ~15x faster (small clip vs full page).
+    Method 1: Pixel check on sig strip clip at 150 DPI (fast, A1 drawings).
+    Method 2: Digital signature detection from text (fallback for rotated/non-A1).
+    Uses whichever gives a higher count — never misses digital sigs.
     """
     if not PIL_OK or not NUMPY_OK:
-        return "WARN", 0
+        # Fallback to digital sig text detection only
+        digital_count = _count_digital_sigs(doc[0])
+        return ("PASS" if digital_count >= 3 else "FAIL"), digital_count
     try:
         page  = doc[0]
+        pw, ph = page.rect.width, page.rect.height
         scale = 150 / 72
         sigs  = COORDS["A1"]["sigs"]
-        # Bounding box around all 5 sig cells
         strip_x0 = min(c[0] for c in sigs.values())
         strip_y0 = min(c[1] for c in sigs.values())
         strip_x1 = max(c[2] for c in sigs.values())
         strip_y1 = max(c[3] for c in sigs.values())
-        clip = fitz.Rect(strip_x0, strip_y0, strip_x1, strip_y1)
-        # Render only the sig strip — fast
-        pix  = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
-                                colorspace=fitz.csGRAY, clip=clip)
-        if pix.width == 0 or pix.height == 0:
-            return "WARN", 0
-        arr   = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
-        count = 0
-        for cx0, cy0, cx1, cy1 in sigs.values():
-            # Pixel coords relative to the clipped region
-            px0 = max(0, int((cx0 - strip_x0) * scale))
-            py0 = max(0, int((cy0 - strip_y0) * scale))
-            px1 = min(pix.width,  int((cx1 - strip_x0) * scale))
-            py1 = min(pix.height, int((cy1 - strip_y0) * scale))
-            if py1 <= py0 or px1 <= px0:
-                continue
-            cell = arr[py0:py1, px0:px1]
-            if cell.size > 0 and np.sum(cell < 200) / cell.size > 0.02:
-                count += 1
-        return ("PASS" if count >= 3 else "FAIL"), count
+
+        pixel_count = 0
+        # Only use pixel check if sig strip is actually within the page
+        if strip_x0 < pw and strip_y0 < ph:
+            clip = fitz.Rect(strip_x0, strip_y0,
+                             min(strip_x1, pw), min(strip_y1, ph))
+            pix  = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
+                                    colorspace=fitz.csGRAY, clip=clip)
+            if pix.width > 0 and pix.height > 0:
+                arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                    pix.height, pix.width)
+                for cx0, cy0, cx1, cy1 in sigs.values():
+                    px0 = max(0, int((cx0 - strip_x0) * scale))
+                    py0 = max(0, int((cy0 - strip_y0) * scale))
+                    px1 = min(pix.width,  int((cx1 - strip_x0) * scale))
+                    py1 = min(pix.height, int((cy1 - strip_y0) * scale))
+                    if py1 <= py0 or px1 <= px0:
+                        continue
+                    cell = arr[py0:py1, px0:px1]
+                    if cell.size > 0 and np.sum(cell < 200) / cell.size > 0.02:
+                        pixel_count += 1
+
+        # Always also count digital signatures from text
+        digital_count = _count_digital_sigs(page)
+
+        # Use the higher count — pixel sigs + digital sigs may overlap
+        count = max(pixel_count, digital_count)
+        status = "PASS" if count >= 3 else "FAIL"
+        return status, count
     except Exception:
-        return "WARN", 0
+        # Last resort — text-only digital sig count
+        digital_count = _count_digital_sigs(doc[0])
+        return ("PASS" if digital_count >= 3 else "WARN"), digital_count
 
 
 def _check_comments(pdf_bytes):
@@ -460,8 +518,14 @@ def _check_classification(doc):
 
 
 def _check_prev_rev(page):
-    text = page.get_text("text").upper()
-    phrases = ["INTER-DISCIPLINE CHECK", "INTER DISCIPLINE CHECK", "ISSUED FOR INTER"]
+    # Replace  (PDF word separator) with space before searching
+    # Without this, "ISSUEDFORINTERDISCIPLINE" does not match "ISSUED FOR INTER"
+    text = page.get_text("text").replace("", " ").upper()
+    phrases = [
+        "INTER-DISCIPLINE CHECK", "INTER DISCIPLINE CHECK",
+        "ISSUED FOR INTER", "INTERDISCIPLINE CHECK",
+        "INTERDISCIPLINE",
+    ]
     if any(p in text for p in phrases):
         return "PASS"
     return "WARN"
@@ -500,23 +564,28 @@ def generate_excel_report(results, transmittal_name=""):
         cell.fill = PatternFill("solid", fgColor="1F2937")
         cell.font = Font(bold=True, color="FFFFFF")
     for ri, r in enumerate(results, 2):
-        ov = r.get("overallResult", "")
-        ws.cell(ri, 1, r.get("srNo", ri-1))
-        ws.cell(ri, 2, r.get("filename", ""))
-        ws.cell(ri, 3, r.get("docNo", ""))
-        ws.cell(ri, 4, r.get("docNoMatch", ""))
-        ws.cell(ri, 5, r.get("cpyNoMatch", ""))
-        ws.cell(ri, 6, r.get("revMatch", ""))
-        ws.cell(ri, 7, f"{r.get('sigCount',0)}/5  {r.get('sigsResult','')}")
-        ws.cell(ri, 8, r.get("commentsResult", ""))
-        ws.cell(ri, 9, r.get("classificationResult", ""))
-        ws.cell(ri, 10, r.get("prevRevResult", ""))
-        ws.cell(ri, 11, r.get("titleMatch", ""))
-        ws.cell(ri, 12, ov)
-        ws.cell(ri, 13, r.get("issues", ""))
-        color = "1E8449" if ov=="PASS" else "C0392B" if ov=="FAIL" else "D68910"
-        ws.cell(ri, 12).fill = PatternFill("solid", fgColor=color)
-        ws.cell(ri, 12).font = Font(bold=True, color="FFFFFF")
+        try:
+            ov = r.get("overallResult", "WARN")
+            sig_count = r.get("sigCount", 0)
+            sig_res   = r.get("sigsResult", "WARN")
+            ws.cell(ri, 1,  r.get("srNo", ri-1))
+            ws.cell(ri, 2,  r.get("filename", ""))
+            ws.cell(ri, 3,  r.get("docNo", ""))
+            ws.cell(ri, 4,  r.get("docNoMatch", "WARN"))
+            ws.cell(ri, 5,  r.get("cpyNoMatch", "WARN"))
+            ws.cell(ri, 6,  r.get("revMatch", "WARN"))
+            ws.cell(ri, 7,  f"{sig_count}/5  {sig_res}")
+            ws.cell(ri, 8,  r.get("commentsResult", "WARN"))
+            ws.cell(ri, 9,  r.get("classificationResult", "WARN"))
+            ws.cell(ri, 10, r.get("prevRevResult", "WARN"))
+            ws.cell(ri, 11, r.get("titleMatch", "WARN"))
+            ws.cell(ri, 12, ov)
+            ws.cell(ri, 13, str(r.get("issues", "")))
+            color = "1E8449" if ov=="PASS" else "C0392B" if ov=="FAIL" else "D68910"
+            ws.cell(ri, 12).fill = PatternFill("solid", fgColor=color)
+            ws.cell(ri, 12).font = Font(bold=True, color="FFFFFF")
+        except Exception:
+            pass   # never let one bad row break the whole report
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
