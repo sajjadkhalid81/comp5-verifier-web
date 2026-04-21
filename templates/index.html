@@ -19,7 +19,7 @@
   header .sub { font-size: 12px; color: var(--muted); }
   .badge { background: #1f6feb22; color: #58a6ff; border: 1px solid #1f6feb; border-radius: 12px; padding: 2px 10px; font-size: 11px; }
 
-  main { max-width: 900px; margin: 40px auto; padding: 0 24px; }
+  main { max-width: 1400px; margin: 24px auto; padding: 0 16px; }
 
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px; }
   .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
@@ -64,9 +64,9 @@
   /* Results table */
   #results-section { display: none; }
   .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { background: #21262d; color: var(--muted); padding: 10px 12px; text-align: left; font-weight: 500; white-space: nowrap; border-bottom: 1px solid var(--border); }
-  td { padding: 9px 12px; border-bottom: 1px solid #21262d; vertical-align: middle; white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+  th { background: #21262d; color: var(--muted); padding: 8px 4px; text-align: center; font-weight: 500; white-space: nowrap; border-bottom: 1px solid var(--border); font-size: 10px; }
+  td { padding: 7px 4px; border-bottom: 1px solid #21262d; vertical-align: middle; }
   tr:last-child td { border-bottom: none; }
   tr:hover td { background: #21262d44; }
 
@@ -151,10 +151,18 @@
       <table id="results-table">
         <thead>
           <tr>
-            <th>#</th><th>Filename</th><th>Doc No.</th>
-            <th>CPY</th><th>Rev</th><th>Sigs</th>
-            <th>Cmts</th><th>Class.</th><th>Prev Rev</th><th>Title</th>
-            <th>RESULT</th><th>Issues</th>
+            <th style="width:32px">#</th>
+            <th style="min-width:140px;max-width:180px">Filename</th>
+            <th style="width:62px">Doc No</th>
+            <th style="width:52px">CPY</th>
+            <th style="width:42px">Rev</th>
+            <th style="width:68px">Sigs</th>
+            <th style="width:48px">Cmts</th>
+            <th style="width:52px">Class.</th>
+            <th style="width:62px">Prev Rev</th>
+            <th style="width:48px">Title</th>
+            <th style="width:62px">RESULT</th>
+            <th style="min-width:120px">Issues</th>
           </tr>
         </thead>
         <tbody id="results-body"></tbody>
@@ -305,19 +313,21 @@ function pill(val) {
 function makeRow(r) {
   const tr = document.createElement('tr');
   const ov = r.overallResult || '?';
+  const fname = r.filename || '';
+  const issues = r.issues || 'None';
   tr.innerHTML = `
-    <td>${r.srNo || ''}</td>
-    <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;" title="${r.filename}">${r.filename}</td>
-    <td>${pill(r.docNoMatch||'?')}</td>
-    <td>${pill(r.cpyNoMatch||'?')}</td>
-    <td>${pill(r.revMatch||'?')}</td>
-    <td>${pill(r.sigsResult||'?')} <span style="color:var(--muted);font-size:10px;">${r.sigCount||0}/5</span></td>
-    <td>${pill(r.commentsResult||'?')}</td>
-    <td>${pill(r.classificationResult||'?')}</td>
-    <td>${pill(r.prevRevResult||'?')}</td>
-    <td>${pill(r.titleMatch||'?')}</td>
-    <td>${pill(ov)}</td>
-    <td style="color:${(r.issues&&r.issues!='None')?'#f85149':'var(--muted)'};max-width:300px;overflow:hidden;text-overflow:ellipsis;font-size:11px;" title="${r.issues||''}">${r.issues||'None'}</td>
+    <td style="text-align:center;padding:6px 4px;">${r.srNo || ''}</td>
+    <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 6px;" title="${fname}">${fname}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.docNoMatch||'?')}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.cpyNoMatch||'?')}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.revMatch||'?')}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.sigsResult||'?')}<br><span style="color:var(--muted);font-size:9px;">${r.sigCount||0}/5</span></td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.commentsResult||'?')}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.classificationResult||'?')}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.prevRevResult||'?')}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.titleMatch||'?')}</td>
+    <td style="text-align:center;padding:6px 4px;font-weight:700;">${pill(ov)}</td>
+    <td style="color:${(issues&&issues!='None')?'#f85149':'var(--muted)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;padding:6px 4px;" title="${issues}">${issues}</td>
   `;
   return tr;
 }
