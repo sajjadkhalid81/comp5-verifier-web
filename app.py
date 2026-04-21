@@ -141,7 +141,28 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
         for idx, (short, pdf_bytes_item, row) in enumerate(matched):
             log(f"[{idx+1}/{total}] Verifying: {short}")
             try:
-                res = verify_pdf(pdf_bytes_item, short, row)
+                # Per-drawing timeout: 45s max on free Render tier
+                import signal as _signal
+                def _timeout_handler(signum, frame):
+                    raise TimeoutError("Drawing verification timed out (45s)")
+                try:
+                    _signal.signal(_signal.SIGALRM, _timeout_handler)
+                    _signal.alarm(45)
+                    res = verify_pdf(pdf_bytes_item, short, row)
+                finally:
+                    _signal.alarm(0)  # cancel alarm
+            except TimeoutError as te:
+                res = {
+                    "filename": short, "overallResult": "WARN",
+                    "issues": "Timed out (45s) — verify manually",
+                    **{k: row.get(k,"") for k in ["srNo","docNo","cpyNo","revision","title"]},
+                    **{k: "WARN" for k in ["docNoMatch","cpyNoMatch","revMatch",
+                                            "sigsResult","commentsResult",
+                                            "classificationResult","prevRevResult","titleMatch"]},
+                    "sigCount": 0, "commentsCount": 0,
+                    "classificationMissingPages": [],
+                    "docNoFromPdf": "", "cpyNoFromPdf": "", "revFromPdf": "",
+                }
             except Exception as e:
                 res = {
                     "filename": short, "overallResult": "FAIL",
