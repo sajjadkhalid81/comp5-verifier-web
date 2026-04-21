@@ -268,8 +268,9 @@ async function poll() {
 
   if (job.status === 'done') {
     clearInterval(pollTimer);
+    currentJobId = currentJobId;  // keep job id so download works
     const s = job.summary || {};
-    document.getElementById('s-total').textContent = s.total || 0;
+    document.getElementById('s-total').textContent = s.total || (job.results||[]).length || 0;
     document.getElementById('s-pass').textContent  = s.passed || 0;
     document.getElementById('s-fail').textContent  = s.failed || 0;
     document.getElementById('s-warn').textContent  = s.warned || 0;
@@ -277,7 +278,22 @@ async function poll() {
     document.getElementById('progress-section').style.display = 'none';
   } else if (job.status === 'error') {
     clearInterval(pollTimer);
-    alert('Error: ' + job.error);
+    alert('Error: ' + (job.error || 'Unknown error'));
+  } else if (job.status === 'running' && (job.results||[]).length > 0 && 
+             (job.results||[]).length === (job.total||0)) {
+    // All results received but status not yet "done" — show summary anyway
+    const s = {
+      total:  (job.results||[]).length,
+      passed: (job.results||[]).filter(r=>r.overallResult==="PASS").length,
+      failed: (job.results||[]).filter(r=>r.overallResult==="FAIL").length,
+      warned: (job.results||[]).filter(r=>r.overallResult==="WARN").length,
+    };
+    document.getElementById('s-total').textContent = s.total;
+    document.getElementById('s-pass').textContent  = s.passed;
+    document.getElementById('s-fail').textContent  = s.failed;
+    document.getElementById('s-warn').textContent  = s.warned;
+    document.getElementById('summary-section').style.display = 'block';
+    document.getElementById('progress-section').style.display = 'none';
   }
 }
 
@@ -308,14 +324,23 @@ function makeRow(r) {
 
 async function downloadReport() {
   if (!currentJobId) return;
-  // Check job is actually done before downloading
-  const resp = await fetch('/api/job/' + currentJobId);
-  const job  = await resp.json();
-  if (job.status !== 'done') {
-    alert('Verification still running. Please wait for it to complete.');
-    return;
+  // Re-check job status fresh from server — do not rely on local JS state
+  try {
+    const resp = await fetch('/api/job/' + currentJobId);
+    const job  = await resp.json();
+    if (job.status === 'done' || (job.results && job.results.length > 0)) {
+      // Job is done — download
+      window.location = '/api/job/' + currentJobId + '/download';
+    } else if (job.status === 'running') {
+      alert('Verification still running. Please wait a moment and try again.');
+    } else {
+      // Unknown state — try download anyway
+      window.location = '/api/job/' + currentJobId + '/download';
+    }
+  } catch(e) {
+    // Network error — try download directly
+    window.location = '/api/job/' + currentJobId + '/download';
   }
-  window.location = '/api/job/' + currentJobId + '/download';
 }
 
 function resetForm() {
