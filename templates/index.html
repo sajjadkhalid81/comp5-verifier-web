@@ -286,7 +286,13 @@ async function poll() {
     document.getElementById('progress-section').style.display = 'none';
   } else if (job.status === 'error') {
     clearInterval(pollTimer);
-    alert('Error: ' + (job.error || 'Unknown error'));
+    alert('Verification error: ' + (job.error || 'Unknown error'));
+  }
+  // Handle 404 job not found
+  if (job.error && job.error.includes('not found')) {
+    clearInterval(pollTimer);
+    document.getElementById('progress-section').style.display = 'none';
+    alert('⚠️ Server restarted and lost the job.\n\nPlease click "New Batch" and run the verification again.\n\n(This happens on the free Render plan when the server sleeps between requests.)');
   } else if (job.status === 'running' && (job.results||[]).length > 0 && 
              (job.results||[]).length === (job.total||0)) {
     // All results received but status not yet "done" — show summary anyway
@@ -334,22 +340,40 @@ function makeRow(r) {
 
 async function downloadReport() {
   if (!currentJobId) return;
-  // Re-check job status fresh from server — do not rely on local JS state
+  const btn = document.querySelector('[onclick="downloadReport()"]');
+  const origText = btn ? btn.textContent : '';
   try {
-    const resp = await fetch('/api/job/' + currentJobId);
-    const job  = await resp.json();
-    if (job.status === 'done' || (job.results && job.results.length > 0)) {
-      // Job is done — download
-      window.location = '/api/job/' + currentJobId + '/download';
-    } else if (job.status === 'running') {
-      alert('Verification still running. Please wait a moment and try again.');
-    } else {
-      // Unknown state — try download anyway
-      window.location = '/api/job/' + currentJobId + '/download';
+    if (btn) { btn.textContent = '⏳ Preparing...'; btn.disabled = true; }
+
+    // Fetch the file as a blob — proper download without page navigation
+    const resp = await fetch('/api/job/' + currentJobId + '/download');
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({error: 'Download failed'}));
+      alert('Download error: ' + (err.error || resp.status));
+      return;
     }
+
+    // Get filename from Content-Disposition header or use default
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename[^;=\n]*=(['"]?)([^\n]*?)\1/);
+    const filename = match ? match[2] : 'Verification_Report.xlsx';
+
+    // Create blob and trigger browser download
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
   } catch(e) {
-    // Network error — try download directly
-    window.location = '/api/job/' + currentJobId + '/download';
+    alert('Download failed: ' + e.message);
+  } finally {
+    if (btn) { btn.textContent = origText; btn.disabled = false; }
   }
 }
 
