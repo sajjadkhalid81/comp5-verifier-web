@@ -230,8 +230,12 @@ def download_report(job_id):
     """Download Excel verification report for a completed job."""
     with jobs_lock:
         job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return jsonify({"error": "Job not ready"}), 400
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    # Allow download if status is done OR if results exist (handles timing edge cases)
+    has_results = len(job.get("results", [])) > 0
+    if job["status"] not in ("done",) and not has_results:
+        return jsonify({"error": "Job not ready — no results yet"}), 400
 
     try:
         from verifier_core import generate_excel_report
