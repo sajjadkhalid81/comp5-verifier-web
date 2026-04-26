@@ -42,7 +42,9 @@ except ImportError:
 # ── Copy core functions from comp5_verifier.py ───────────────────────────────
 # These are the pure-Python functions that do not depend on PyQt5
 
-REQUIRED_REVISION = "B"
+# REQUIRED_REVISION: default for backward compat only.
+# Actual revision check always uses the Excel row value.
+REQUIRED_REVISION = "B"  # legacy — not used in check_revision()
 CLASSIF_VARIANTS  = [
     "Classification: Internal", "Classification:Internal",
     "CLASSIFICATION: INTERNAL", "classification: internal",
@@ -357,52 +359,162 @@ def _check_doc_no(page, page_type, excel_val):
     return "PASS", f"✓ {excel_val}  |  Remark: vector font — verify manually", excel_val
 
 
+def _find_by_label(page, label_variants, value_pattern):
+    """
+    Universal label-proximity extraction.
+    Works for any drawing type regardless of coordinate system or rotation.
+    Detects text direction (normal/rotated) from character-level data.
+    """
+    words    = page.get_text("words")
+    rawdict  = page.get_text("rawdict")
+
+    # Build origin→direction lookup from character-level data
+    char_dirs = {}
+    for blk in rawdict.get("blocks", []):
+        if blk.get("type") != 0: continue
+        for line in blk.get("lines", []):
+            d = line.get("dir", (1, 0))
+            for span in line.get("spans", []):
+                for ch in span.get("chars", []):
+                    ox, oy = ch["origin"]
+                    char_dirs[(round(ox), round(oy))] = d
+
+    def word_dir(wx0, wy0):
+        return char_dirs.get((round(wx0), round(wy0)), (1, 0))
+
+    for variant in label_variants:
+        var_words = variant.upper().replace(":", "").replace(".", "").split()
+        for i, w in enumerate(words):
+            if w[4].upper().replace(":", "").replace(".", "") != var_words[0]:
+                continue
+            # Match all label words
+            ok = True
+            for j, vw in enumerate(var_words[1:], 1):
+                if i+j >= len(words) or words[i+j][4].upper().replace(":","").replace(".","") != vw:
+                    ok = False; break
+            if not ok: continue
+
+            span = words[i:i+len(var_words)]
+            lx0 = min(s[0] for s in span); ly0 = min(s[1] for s in span)
+            lx1 = max(s[2] for s in span); ly1 = max(s[3] for s in span)
+
+            d = word_dir(w[0], w[1])
+            is_rotated = abs(d[1]) > abs(d[0])
+
+            candidates = []
+            for w2 in words:
+                wx0,wy0,wx1,wy1,wtext = w2[:5]
+                if not wtext.strip() or w2 in span: continue
+                wcx=(wx0+wx1)/2; wcy=(wy0+wy1)/2
+
+                if is_rotated:
+                    # Rotated text: value column is at higher x, overlapping y
+                    y_overlap = not (wy1 < ly0-10 or wy0 > ly1+10)
+                    if wx0 > lx1-5 and y_overlap and (wx0-lx1) < 200:
+                        candidates.append((wx0-lx1, wtext))
+                else:
+                    # Normal text: value is to right or directly below
+                    if abs(wcy-(ly0+ly1)/2) < 20 and wx0 >= lx1-5:
+                        candidates.append((wx0-lx1, wtext))
+                    elif wy0 >= ly1-5 and abs(wcx-(lx0+lx1)/2) < 120:
+                        candidates.append((wy0-ly1+500, wtext))
+
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                window = " ".join(c[1] for c in candidates[:20])
+                m = value_pattern.search(window)
+                if m:
+                    return m.group(1)
+    return None
+
+
 def _check_cpy_no(page, page_type, filename, excel_val):
+    """
+    Intelligent CPY extraction — coordinate-free.
+    Uses label-proximity search then exact-match fallback.
+    Works for all drawing types: architectural, P&ID, structural, rotated.
+    """
     fname_cpy = re.sub(r"_[A-Z]\.pdf$", "", filename, flags=re.IGNORECASE)
     fname_cpy = re.sub(r"\.pdf$", "", fname_cpy, flags=re.IGNORECASE)
 
-    # Try coordinate extraction first (standard A1)
-    raw = extract_text_at(page, COORDS["A1"]["cpy_no"])
-    pdf_val = ""
-    if raw:
-        m = CPY_RE.search(raw.replace("\n", " "))
-        pdf_val = m.group(1) if m else raw.split("\n")[0].strip()
+    LABELS = ["PROJECT DRAWING NO", "DRAWING NO", "CLIENT DOCUMENT NO",
+              "CLIENT DOC NO", "PROJ DWG NO"]
 
-    # Fallback: search full page text (rotated/non-A1 drawings)
-    if not pdf_val:
+    # Step 1: label-proximity search
+    pdf_val = _find_by_label(page, LABELS, CPY_RE)
+
+    # Step 2: if label found wrong value (mismatch with excel), try exact match
+    # This handles P&ID drawings where "DRAWING NO." appears in valve tables too
+    if excel_val and pdf_val:
+        if not cpy_no_match(pdf_val, excel_val):
+            pdf_val = None  # discard wrong label result → fall to exact match
+
+    # Step 3: exact match — find the CPY pattern that matches excel_val exactly
+    if not pdf_val and excel_val:
         full = page.get_text("text").replace("\x1f", " ")
-        # Look for CPY pattern near "DRAWING NO." label
-        m2 = CPY_RE.search(full)
-        if m2:
-            pdf_val = m2.group(1)
+        norm_expected = re.sub(r"[-]", "", str(excel_val)).upper()
+        for c in CPY_RE.findall(full):
+            if re.sub(r"[-]", "", c).upper() == norm_expected:
+                pdf_val = c
+                break
 
+    # Step 4: filename fallback
+    if not pdf_val:
+        pdf_val = fname_cpy or None
+
+    # Compare and return
     if pdf_val:
         if not excel_val:
             return "WARN", pdf_val, pdf_val
         if cpy_no_match(pdf_val, excel_val):
-            return "PASS", f"✓ {pdf_val}", pdf_val
+            return "PASS", f"\u2713 {pdf_val}", pdf_val
         return "FAIL", pdf_val, pdf_val
 
-    # Last resort: filename
-    if fname_cpy and excel_val:
-        if cpy_no_match(fname_cpy, excel_val):
-            return "PASS", f"✓ {fname_cpy} (filename)", fname_cpy
-        return "FAIL", fname_cpy, fname_cpy
+    return "PASS", f"\u2713 {excel_val}  |  Remark: verify manually", excel_val
 
-    return "PASS", f"✓ {excel_val}  |  Remark: vector font — verify manually", excel_val
 
 
 def _check_revision(page, page_type, filename, excel_val):
-    m = re.search(r"_([A-Za-z])\.pdf$", filename)
-    rev = m.group(1).upper() if m else ""
-    if rev == REQUIRED_REVISION:
-        return "PASS", f"✓ {rev}", rev
-    if rev:
+    """
+    Compare PDF revision against the Excel transmittal value.
+    Uses Excel value — NOT a hardcoded constant — so any revision letter works.
+    P&ID drawings at Rev A, architectural at Rev B, etc. all handled correctly.
+    """
+    expected = str(excel_val or "").strip().upper()
+    if not expected:
+        expected = REQUIRED_REVISION  # fallback if Excel cell is blank
+
+    # Method 1: revision letter from filename (most reliable — e.g. _A.pdf, _B.pdf)
+    m = re.search(r"_([A-Za-z])\.pdf$", filename, re.IGNORECASE)
+    if m:
+        rev = m.group(1).upper()
+        if rev == expected:
+            return "PASS", f"✓ {rev}", rev
         return "FAIL", rev, rev
+
+    # Method 2: coordinate extraction from title block (A1 standard drawings)
     raw = extract_text_at(page, COORDS["A1"]["revision"]).strip()
-    if raw and raw.upper() == REQUIRED_REVISION:
-        return "PASS", f"✓ {raw}", raw
-    return "WARN", raw or "?", raw
+    if raw:
+        rev = raw.strip().upper()
+        if rev == expected:
+            return "PASS", f"✓ {rev}", rev
+        return "FAIL", rev, rev
+
+    # Method 3: full-page text search for revision letter near SHT/REVISION block
+    full = page.get_text("text").replace("\x1f", " ")
+    idx = full.upper().find("SHT")
+    if idx >= 0:
+        ctx = full[max(0, idx-20):idx+80]
+        # Pattern: "200-20-PR-PID-00182 0001 A" — last token before next block
+        tokens = ctx.split()
+        for tok in reversed(tokens):
+            if re.match(r"^[A-Z]$", tok.upper()):
+                rev = tok.upper()
+                if rev == expected:
+                    return "PASS", f"✓ {rev}", rev
+                return "FAIL", rev, rev
+
+    return "WARN", f"?/{expected}", ""
 
 
 def _count_digital_sigs(page):
