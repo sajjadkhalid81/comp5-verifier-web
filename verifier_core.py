@@ -279,6 +279,7 @@ def verify_pdf(pdf_bytes, filename, row):
         if sig_status == "FAIL": issues_parts.append(f"Insufficient signatures ({sig_count}/5)")
         if com_status == "FAIL": issues_parts.append(f"{com_count} comment(s)")
         if cls_status == "FAIL": issues_parts.append(f"Classification missing on pages: {cls_missing}")
+        if cls_status == "WARN": issues_parts.append(f"Classification not found on pages: {cls_missing}")
         if prev_status == "WARN": issues_parts.append("Prev rev not confirmed")
         if ttl_status == "WARN": issues_parts.append("Title not confirmed")
 
@@ -614,68 +615,133 @@ def _check_comments(pdf_bytes):
         return "WARN", 0
 
 
+def _find_title_block_region(page):
+    """
+    Dynamically locate the title block on any drawing type.
+    Uses known anchor labels (CONTRACTOR DRAWING NO, REVISION, SCALE, etc.)
+    to calculate the bounding box — no hardcoded coordinates.
+    Returns (x0, y0, x1, y1) or None if title block cannot be located.
+    """
+    words = page.get_text("words")
+    pw, ph = page.rect.width, page.rect.height
+
+    ANCHORS = [
+        ["CONTRACTOR", "DRAWING", "NO"],
+        ["PROJECT", "NO"],
+        ["REVISION"], ["SCALE"],
+        ["PROJECT", "TITLE"],
+        ["DRAWING", "NO"],
+        ["SHT"], ["DRN"], ["CHKD"], ["APVD"],
+    ]
+
+    positions = []
+    for anchor in ANCHORS:
+        for i, w in enumerate(words):
+            if w[4].upper().replace(":", "").replace(".", "") != anchor[0]:
+                continue
+            ok = all(
+                i+j < len(words) and
+                words[i+j][4].upper().replace(":", "").replace(".", "") == av
+                for j, av in enumerate(anchor[1:], 1)
+            )
+            if ok:
+                span = words[i:i+len(anchor)]
+                positions.append((
+                    (min(s[0] for s in span) + max(s[2] for s in span)) / 2,
+                    (min(s[1] for s in span) + max(s[3] for s in span)) / 2,
+                ))
+                break
+
+    if len(positions) < 2:
+        return None
+
+    xs = [p[0] for p in positions]
+    ys = [p[1] for p in positions]
+    margin = 80
+    return (
+        max(0,  min(xs) - margin),
+        max(0,  min(ys) - margin),
+        min(pw, max(xs) + margin),
+        min(ph, max(ys) + margin),
+    )
+
+
 def _check_classification(doc):
     """
-    Coordinate-free, pixel-free classification detection.
-    Uses the same label-proximity search as Doc No, CPY No, and Revision.
+    Fully intelligent classification check — no pixels, no coordinates.
 
-    Searches for the "Classification" label anywhere on the page,
-    then reads the adjacent value — works for any drawing template,
-    any orientation, any discipline.
+    Uses the same label-proximity mechanism as Doc No, CPY No, Revision.
+
+    Algorithm:
+      1. Fast full-text search for explicit "Classification: Internal" phrase
+      2. Dynamically locate title block using anchor labels
+         (CONTRACTOR DRAWING NO, REVISION, SCALE, etc.)
+      3. Search for "Classification" label ONLY within title block region
+         — eliminates false positives from drawing body content
+         (e.g. "ARCHITECTURAL INTERNAL DOORS DETAIL" in notes)
+      4. Read adjacent value using label-proximity logic
 
     Results:
-      PASS — "Classification: Internal" confirmed from label+value
-      WARN — Label not found (template has no classification field)
-              OR value found but not "Internal"
+      PASS — "Classification: Internal" confirmed in title block
+      WARN — No classification field in title block (template has none)
+              OR label found but value is not "Internal"
     """
     missing = []
 
     for i, page in enumerate(doc):
-        words  = page.get_text("words")
-        full   = page.get_text("text").replace("\x1f", " ")
+        words   = page.get_text("words")
+        full    = page.get_text("text").replace("\x1f", " ")
         compact = re.sub(r"\s+", " ", full)
 
-        # Step 1: Fast full-text search — handles clean vector text stamps
+        # Step 1: Fast full-text phrase match
         if re.search(r"classif.{0,5}ication\s*:\s*internal", compact, re.IGNORECASE):
             continue  # PASS
 
-        # Step 2: Find "Classification" label word anywhere on page
-        label_word = None
-        for w in words:
-            clean = w[4].replace(":", "").strip().upper()
-            if clean == "CLASSIFICATION":
-                label_word = w
-                break
+        # Step 2: Locate title block dynamically
+        tb = _find_title_block_region(page)
 
-        if not label_word:
-            # No classification field in this drawing template → WARN
+        # Step 3: Search for "Classification" label INSIDE title block only
+        cls_word = None
+        for w in words:
+            if w[4].replace(":", "").strip().upper() != "CLASSIFICATION":
+                continue
+            if tb:
+                # Reject if this word is outside the title block region
+                wcx = (w[0] + w[2]) / 2
+                wcy = (w[1] + w[3]) / 2
+                if not (tb[0] <= wcx <= tb[2] and tb[1] <= wcy <= tb[3]):
+                    continue
+            cls_word = w
+            break
+
+        if not cls_word:
             missing.append(i + 1)
             continue
 
-        # Step 3: Read value adjacent to label (right, below, or rotated-right)
-        lx0, ly0, lx1, ly1 = label_word[:4]
+        # Step 4: Read value adjacent to label
+        lx0, ly0, lx1, ly1 = cls_word[:4]
         candidates = []
         for w2 in words:
             wx0, wy0, wx1, wy1, wtext = w2[:5]
-            if not wtext.strip() or w2 == label_word:
+            if not wtext.strip() or w2 == cls_word:
                 continue
-            # Normal text — value to the right
-            if abs((wy0+wy1)/2 - (ly0+ly1)/2) < 25 and wx0 >= lx1 - 5:
-                candidates.append((wx0 - lx1, wtext))
-            # Normal text — value below
-            elif wy0 >= ly1 - 5 and (wy0 - ly1) < 40 and abs((wx0+wx1)/2 - (lx0+lx1)/2) < 80:
-                candidates.append((wy0 - ly1 + 500, wtext))
-            # Rotated text — value at higher x, overlapping y (P&ID rotated layout)
-            elif wx0 > lx1 - 5 and not (wy1 < ly0-10 or wy0 > ly1+10) and (wx0-lx1) < 150:
-                candidates.append((wx0 - lx1 + 1000, wtext))
+            wcx, wcy = (wx0+wx1)/2, (wy0+wy1)/2
+            # Right of label (normal orientation)
+            if abs(wcy-(ly0+ly1)/2) < 25 and wx0 >= lx1-5:
+                candidates.append((wx0-lx1, wtext))
+            # Below label
+            elif wy0 >= ly1-5 and (wy0-ly1) < 40 and abs(wcx-(lx0+lx1)/2) < 80:
+                candidates.append((wy0-ly1+500, wtext))
+            # Rotated (higher x, overlapping y — P&ID rotated title block)
+            elif wx0 > lx1-5 and not (wy1 < ly0-10 or wy0 > ly1+10) and (wx0-lx1) < 150:
+                candidates.append((wx0-lx1+1000, wtext))
 
         if candidates:
             candidates.sort(key=lambda x: x[0])
             value = " ".join(c[1] for c in candidates[:5]).strip()
             if "INTERNAL" in value.upper():
-                continue  # PASS — confirmed
-
-        # Label found but value is not "Internal" → WARN
+                continue  # PASS
+        # Label found but value unreadable or not "Internal"
         missing.append(i + 1)
 
     return ("PASS" if not missing else "WARN"), missing
