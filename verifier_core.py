@@ -616,79 +616,69 @@ def _check_comments(pdf_bytes):
 
 def _check_classification(doc):
     """
-    Coordinate-free classification stamp detection.
+    Coordinate-free, pixel-free classification detection.
+    Uses the same label-proximity search as Doc No, CPY No, and Revision.
 
-    NO hardcoded pixel coordinates — works for any drawing type:
-    AB architectural, PR P&ID, ST structural, HV HVAC, PI piping, etc.
+    Searches for the "Classification" label anywhere on the page,
+    then reads the adjacent value — works for any drawing template,
+    any orientation, any discipline.
 
-    Method 1 — Text search (instant, free):
-        Catches vector-rendered stamps e.g. "Classification: Internal"
-        Handles stamps split across lines: "Classif" + "ication: Internal"
-
-    Method 2 — Corner-scan at 36 DPI (fast, 17x faster than 150 DPI):
-        Checks all 4 corners in progressively larger regions.
-        Stamp can be anywhere on the page border — top-left, top-right,
-        bottom-left, bottom-right, or mid-edge.
-        36 DPI is sufficient to detect any stamp ≥ 80pt wide.
-
-    Returns: ("PASS"|"FAIL"), [list of missing page numbers]
+    Results:
+      PASS — "Classification: Internal" confirmed from label+value
+      WARN — Label not found (template has no classification field)
+              OR value found but not "Internal"
     """
     missing = []
 
     for i, page in enumerate(doc):
-        # ── Method 1: text search ───────────────────────────────────────────
-        full    = page.get_text("text").replace("\x1f", " ")
+        words  = page.get_text("words")
+        full   = page.get_text("text").replace("\x1f", " ")
         compact = re.sub(r"\s+", " ", full)
-        if re.search(r"classif.{0,5}ication.{0,10}internal", compact, re.IGNORECASE):
-            continue
 
-        # ── Method 2: corner-scan at 36 DPI ────────────────────────────────
-        # 36 DPI = scale 0.5 — fast enough for 20-page ST drawings
-        scale   = 36 / 72
-        pix     = page.get_pixmap(
-            matrix=fitz.Matrix(scale, scale), colorspace=fitz.csGRAY
-        )
-        arr     = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-            pix.height, pix.width
-        )
-        W, H    = pix.width, pix.height
+        # Step 1: Fast full-text search — handles clean vector text stamps
+        if re.search(r"classif.{0,5}ication\s*:\s*internal", compact, re.IGNORECASE):
+            continue  # PASS
 
-        # Corner region sizes (in pixels at 36 DPI)
-        # Small = 200pt, Medium = 500pt, Large = 800pt wide
-        # Height = 80pt, 150pt, 200pt
-        sm_w, md_w, lg_w = int(200*scale), int(500*scale), int(800*scale)
-        sm_h, md_h, lg_h = int(80*scale),  int(150*scale), int(200*scale)
-
-        regions = [
-            (0,      0,      sm_w, sm_h),   # top-left  small
-            (0,      0,      md_w, md_h),   # top-left  medium
-            (0,      0,      lg_w, lg_h),   # top-left  large
-            (W-sm_w, 0,      W,    sm_h),   # top-right small
-            (W-md_w, 0,      W,    md_h),   # top-right medium
-            (0,      H-sm_h, sm_w, H   ),   # bottom-left  small
-            (0,      H-md_h, md_w, H   ),   # bottom-left  medium
-            (W-sm_w, H-sm_h, W,    H   ),   # bottom-right small
-            (W-md_w, H-md_h, W,    H   ),   # bottom-right medium
-        ]
-
-        found = False
-        for (x0, y0, x1, y1) in regions:
-            x0, y0 = max(0, x0), max(0, y0)
-            x1, y1 = min(W, x1), min(H, y1)
-            if x1 <= x0 or y1 <= y0:
-                continue
-            region = arr[y0:y1, x0:x1]
-            if region.size == 0:
-                continue
-            dark_pct = int(np.sum(region < 230)) / region.size
-            if dark_pct > 0.008:   # 0.8% — same threshold as before
-                found = True
+        # Step 2: Find "Classification" label word anywhere on page
+        label_word = None
+        for w in words:
+            clean = w[4].replace(":", "").strip().upper()
+            if clean == "CLASSIFICATION":
+                label_word = w
                 break
 
-        if not found:
+        if not label_word:
+            # No classification field in this drawing template → WARN
             missing.append(i + 1)
+            continue
 
-    return ("PASS" if not missing else "FAIL"), missing
+        # Step 3: Read value adjacent to label (right, below, or rotated-right)
+        lx0, ly0, lx1, ly1 = label_word[:4]
+        candidates = []
+        for w2 in words:
+            wx0, wy0, wx1, wy1, wtext = w2[:5]
+            if not wtext.strip() or w2 == label_word:
+                continue
+            # Normal text — value to the right
+            if abs((wy0+wy1)/2 - (ly0+ly1)/2) < 25 and wx0 >= lx1 - 5:
+                candidates.append((wx0 - lx1, wtext))
+            # Normal text — value below
+            elif wy0 >= ly1 - 5 and (wy0 - ly1) < 40 and abs((wx0+wx1)/2 - (lx0+lx1)/2) < 80:
+                candidates.append((wy0 - ly1 + 500, wtext))
+            # Rotated text — value at higher x, overlapping y (P&ID rotated layout)
+            elif wx0 > lx1 - 5 and not (wy1 < ly0-10 or wy0 > ly1+10) and (wx0-lx1) < 150:
+                candidates.append((wx0 - lx1 + 1000, wtext))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            value = " ".join(c[1] for c in candidates[:5]).strip()
+            if "INTERNAL" in value.upper():
+                continue  # PASS — confirmed
+
+        # Label found but value is not "Internal" → WARN
+        missing.append(i + 1)
+
+    return ("PASS" if not missing else "WARN"), missing
 
 
 def _check_prev_rev(page):
