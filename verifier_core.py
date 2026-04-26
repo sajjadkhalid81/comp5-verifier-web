@@ -364,6 +364,10 @@ def _find_by_label(page, label_variants, value_pattern):
     Universal label-proximity extraction.
     Works for any drawing type regardless of coordinate system or rotation.
     Detects text direction (normal/rotated) from character-level data.
+
+    Also searches INSIDE the label block itself — handles drawings where
+    label and value are in the same text block e.g.:
+    "CONTRACTOR DRAWING NO: 033784-E-FAX-24-SPM-AR-D-10027-0001"
     """
     words    = page.get_text("words")
     rawdict  = page.get_text("rawdict")
@@ -425,6 +429,17 @@ def _find_by_label(page, label_variants, value_pattern):
                 m = value_pattern.search(window)
                 if m:
                     return m.group(1)
+    # Fallback: search inside each label block (label + value in same block)
+    # e.g. "CONTRACTOR DRAWING NO: 033784-..."
+    blocks = page.get_text("blocks")
+    for variant in label_variants:
+        var_upper = variant.upper()
+        for b in blocks:
+            if var_upper in b[4].upper().replace("\x1f", " ").replace(":", "").replace(".", ""):
+                m = value_pattern.search(b[4].replace("\x1f", " ").replace("\n", " "))
+                if m:
+                    return m.group(1)
+
     return None
 
 
@@ -601,31 +616,78 @@ def _check_comments(pdf_bytes):
 
 def _check_classification(doc):
     """
-    Text search first (free), then render ONLY the classification stamp
-    corner (0,0,500,80) at 150 DPI using numpy — same quality as desktop,
-    much faster for multi-page drawings (ST drawings have 12-21 pages).
+    Coordinate-free classification stamp detection.
+
+    NO hardcoded pixel coordinates — works for any drawing type:
+    AB architectural, PR P&ID, ST structural, HV HVAC, PI piping, etc.
+
+    Method 1 — Text search (instant, free):
+        Catches vector-rendered stamps e.g. "Classification: Internal"
+        Handles stamps split across lines: "Classif" + "ication: Internal"
+
+    Method 2 — Corner-scan at 36 DPI (fast, 17x faster than 150 DPI):
+        Checks all 4 corners in progressively larger regions.
+        Stamp can be anywhere on the page border — top-left, top-right,
+        bottom-left, bottom-right, or mid-edge.
+        36 DPI is sufficient to detect any stamp ≥ 80pt wide.
+
+    Returns: ("PASS"|"FAIL"), [list of missing page numbers]
     """
     missing = []
-    scale   = 150 / 72
-    clip    = fitz.Rect(*CLASSIF_REGION)
+
     for i, page in enumerate(doc):
-        # Method 1: free text search — handles most cases instantly
-        full_text = page.get_text("text")
-        if any(v in full_text for v in CLASSIF_VARIANTS):
+        # ── Method 1: text search ───────────────────────────────────────────
+        full    = page.get_text("text").replace("\x1f", " ")
+        compact = re.sub(r"\s+", " ", full)
+        if re.search(r"classif.{0,5}ication.{0,10}internal", compact, re.IGNORECASE):
             continue
-        # Method 2: pixel check on stamp corner ONLY
-        try:
-            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
-                                   colorspace=fitz.csGRAY, clip=clip)
-            if pix.width > 0 and pix.height > 0:
-                arr   = np.frombuffer(pix.samples, dtype=np.uint8)
-                total = arr.size
-                nw    = int(np.sum(arr < 230))
-                if total > 0 and (nw / total) > 0.008:
-                    continue
-        except Exception:
-            pass
-        missing.append(i + 1)
+
+        # ── Method 2: corner-scan at 36 DPI ────────────────────────────────
+        # 36 DPI = scale 0.5 — fast enough for 20-page ST drawings
+        scale   = 36 / 72
+        pix     = page.get_pixmap(
+            matrix=fitz.Matrix(scale, scale), colorspace=fitz.csGRAY
+        )
+        arr     = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+            pix.height, pix.width
+        )
+        W, H    = pix.width, pix.height
+
+        # Corner region sizes (in pixels at 36 DPI)
+        # Small = 200pt, Medium = 500pt, Large = 800pt wide
+        # Height = 80pt, 150pt, 200pt
+        sm_w, md_w, lg_w = int(200*scale), int(500*scale), int(800*scale)
+        sm_h, md_h, lg_h = int(80*scale),  int(150*scale), int(200*scale)
+
+        regions = [
+            (0,      0,      sm_w, sm_h),   # top-left  small
+            (0,      0,      md_w, md_h),   # top-left  medium
+            (0,      0,      lg_w, lg_h),   # top-left  large
+            (W-sm_w, 0,      W,    sm_h),   # top-right small
+            (W-md_w, 0,      W,    md_h),   # top-right medium
+            (0,      H-sm_h, sm_w, H   ),   # bottom-left  small
+            (0,      H-md_h, md_w, H   ),   # bottom-left  medium
+            (W-sm_w, H-sm_h, W,    H   ),   # bottom-right small
+            (W-md_w, H-md_h, W,    H   ),   # bottom-right medium
+        ]
+
+        found = False
+        for (x0, y0, x1, y1) in regions:
+            x0, y0 = max(0, x0), max(0, y0)
+            x1, y1 = min(W, x1), min(H, y1)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            region = arr[y0:y1, x0:x1]
+            if region.size == 0:
+                continue
+            dark_pct = int(np.sum(region < 230)) / region.size
+            if dark_pct > 0.008:   # 0.8% — same threshold as before
+                found = True
+                break
+
+        if not found:
+            missing.append(i + 1)
+
     return ("PASS" if not missing else "FAIL"), missing
 
 
