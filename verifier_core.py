@@ -276,7 +276,7 @@ def verify_pdf(pdf_bytes, filename, row):
         if doc_status == "FAIL": issues_parts.append(f"Doc No mismatch (PDF: {doc_from_pdf} | Excel: {excel_doc})")
         if cpy_status == "FAIL": issues_parts.append(f"CPY No mismatch (PDF: {cpy_from_pdf} | Excel: {excel_cpy})")
         if rev_status == "FAIL": issues_parts.append(f"Rev mismatch (PDF: {rev_from_pdf})")
-        if sig_status == "FAIL": issues_parts.append(f"Insufficient signatures ({sig_count}/5)")
+        if sig_status == "FAIL": issues_parts.append(f"Insufficient signatures — found {sig_count}, required 3 (DRN/BY + CHKD + APVD)")
         if com_status == "FAIL": issues_parts.append(f"{com_count} comment(s)")
         if cls_status == "FAIL": issues_parts.append(f"Classification missing on pages: {cls_missing}")
         if cls_status == "WARN": issues_parts.append(f"Classification not found on pages: {cls_missing}")
@@ -533,137 +533,146 @@ def _check_revision(page, page_type, filename, excel_val):
     return "WARN", f"?/{expected}", ""
 
 
-def _count_digital_sigs(page):
-    """Count digital signatures from PDF text (DN: CN= pattern)."""
-    text = page.get_text("text").replace("\x1f", " ")
-    # Each digital sig has a DN: CN= entry
-    dns = re.findall(r"DN:\s*CN=([^,\n]+)", text, re.IGNORECASE)
-    # Also count "Digitally signed by" occurrences
-    signed_by = len(re.findall(r"digitally\s+signed\s+by", text, re.IGNORECASE))
-    return max(len(dns), signed_by)
+def _detect_rotation(page):
+    """
+    Majority-vote rotation detection.
+    Returns True only if MOST characters are rotated (like P&ID drawings).
+    Prevents false rotated detection from classification stamps or watermarks.
+    """
+    rawdict = page.get_text("rawdict")
+    normal = rotated = 0
+    for blk in rawdict.get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for line in blk.get("lines", []):
+            d = line.get("dir", (1, 0))
+            chars = sum(len(s.get("chars", [])) for s in line.get("spans", []))
+            if abs(d[0]) >= abs(d[1]):
+                normal += chars
+            else:
+                rotated += chars
+    return rotated > normal
+
+
+def _has_sig_content(text):
+    """
+    Returns True if text represents an actual signature.
+    Returns False for empty cells, "NOT REQUIRED", "N/A" etc.
+    """
+    clean = " ".join(text.strip().split())
+    if not clean or len(clean) < 2:
+        return False
+    # Remove "NOT REQUIRED" fragments before checking
+    clean2 = re.sub(r"not\s+required|not\s+req", "", clean, flags=re.IGNORECASE).strip()
+    if len(clean2) < 2:
+        return False
+    # Initials (2-5 uppercase letters)
+    if re.search(r"\b[A-Z]{2,5}\b", clean2):
+        return True
+    # Date patterns
+    if re.search(r"\d{2}[-./]\d{2}|\d{4}", clean2):
+        return True
+    # Person names (mixed case)
+    if re.search(r"[A-Z][a-z]{2,}", clean2):
+        return True
+    return False
 
 
 def _check_signatures(doc, page_type):
     """
-    Method 1: Pixel check on sig strip clip at 150 DPI (fast, A1 drawings).
-    Method 2: Digital signature detection from text (fallback for rotated/non-A1).
-    Uses whichever gives a higher count — never misses digital sigs.
+    Universal signature check — label-driven, no fixed coordinates.
+
+    Handles all drawing types and signature styles:
+    - AB Architectural: DRN / CHKD / APVD labels in horizontal row
+    - PR P&ID / PI:     BY  / CHKD / APVD labels in vertical (rotated) column
+    - HV / ST:          Scanned sigs — person names + dates clustered together
+
+    Method 1 — Label proximity (DRN/BY + CHKD + APVD):
+        Finds all sig labels, groups by row (normal) or column (rotated).
+        Reads text ABOVE (normal) or RIGHT (rotated) of each label.
+        Counts cells with actual content vs "NOT REQUIRED" / empty.
+
+    Method 2 — Digital sig text (Foxit visual signatures):
+        Counts DN: CN= entries and "Digitally signed by" phrases.
+
+    Method 3 — Date cluster (scanned signatures):
+        Finds date blocks (20XX.MM pattern) clustered in same area.
+        Count of clustered dates = count of signers.
+
+    Required: >= 3 signed cells for PASS.
     """
-    if not PIL_OK or not NUMPY_OK:
-        # Fallback to digital sig text detection only
-        digital_count = _count_digital_sigs(doc[0])
-        return ("PASS" if digital_count >= 3 else "FAIL"), digital_count
-    try:
-        page  = doc[0]
-        pw, ph = page.rect.width, page.rect.height
-        scale = 150 / 72
-        sigs  = COORDS["A1"]["sigs"]
-        strip_x0 = min(c[0] for c in sigs.values())
-        strip_y0 = min(c[1] for c in sigs.values())
-        strip_x1 = max(c[2] for c in sigs.values())
-        strip_y1 = max(c[3] for c in sigs.values())
+    page = doc[0]
+    words  = page.get_text("words")
+    full   = page.get_text("text").replace("\x1f", " ")
+    blocks = page.get_text("blocks")
 
-        pixel_count = 0
-        # Only use pixel check if sig strip is actually within the page
-        if strip_x0 < pw and strip_y0 < ph:
-            clip = fitz.Rect(strip_x0, strip_y0,
-                             min(strip_x1, pw), min(strip_y1, ph))
-            pix  = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
-                                    colorspace=fitz.csGRAY, clip=clip)
-            if pix.width > 0 and pix.height > 0:
-                arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-                    pix.height, pix.width)
-                for cx0, cy0, cx1, cy1 in sigs.values():
-                    px0 = max(0, int((cx0 - strip_x0) * scale))
-                    py0 = max(0, int((cy0 - strip_y0) * scale))
-                    px1 = min(pix.width,  int((cx1 - strip_x0) * scale))
-                    py1 = min(pix.height, int((cy1 - strip_y0) * scale))
-                    if py1 <= py0 or px1 <= px0:
-                        continue
-                    cell = arr[py0:py1, px0:px1]
-                    if cell.size > 0 and np.sum(cell < 200) / cell.size > 0.02:
-                        pixel_count += 1
+    SIG_LABELS = {"BY", "DRN", "CHKD", "APVD", "DSGND"}
+    REQUIRED   = {"BY", "DRN", "CHKD", "APVD"}
 
-        # Always also count digital signatures from text
-        digital_count = _count_digital_sigs(page)
+    is_rotated = _detect_rotation(page)
 
-        # Use the higher count — pixel sigs + digital sigs may overlap
-        count = max(pixel_count, digital_count)
-        status = "PASS" if count >= 3 else "FAIL"
-        return status, count
-    except Exception:
-        # Last resort — text-only digital sig count
-        digital_count = _count_digital_sigs(doc[0])
-        return ("PASS" if digital_count >= 3 else "WARN"), digital_count
+    # ── Method 1: Label-proximity ─────────────────────────────────────────────
+    from collections import defaultdict
+    rows = defaultdict(list)
+    for w in words:
+        clean = w[4].upper().replace(":", "").replace(".", "").strip()
+        if clean in SIG_LABELS:
+            # Group by y (normal) or x (rotated)
+            key = round((w[0] if is_rotated else w[1]) / 8) * 8
+            rows[key].append((clean, w[0], w[1], w[2], w[3]))
 
-
-def _check_comments(pdf_bytes):
-    if not PYPDF_OK:
-        return "WARN", 0
-    try:
-        reader = PdfReader(BytesIO(pdf_bytes))
-        count  = 0
-        for pg in reader.pages:
-            annots = pg.get("/Annots")
-            if annots:
-                for ann in annots:
-                    ao = ann.get_object()
-                    if str(ao.get("/Subtype", "")).replace(" ", "") not in ("/Widget", "/Link"):
-                        count += 1
-        return ("PASS" if count == 0 else "FAIL"), count
-    except Exception:
-        return "WARN", 0
-
-
-def _find_title_block_region(page):
-    """
-    Dynamically locate the title block on any drawing type.
-    Uses known anchor labels (CONTRACTOR DRAWING NO, REVISION, SCALE, etc.)
-    to calculate the bounding box — no hardcoded coordinates.
-    Returns (x0, y0, x1, y1) or None if title block cannot be located.
-    """
-    words = page.get_text("words")
-    pw, ph = page.rect.width, page.rect.height
-
-    ANCHORS = [
-        ["CONTRACTOR", "DRAWING", "NO"],
-        ["PROJECT", "NO"],
-        ["REVISION"], ["SCALE"],
-        ["PROJECT", "TITLE"],
-        ["DRAWING", "NO"],
-        ["SHT"], ["DRN"], ["CHKD"], ["APVD"],
-    ]
-
-    positions = []
-    for anchor in ANCHORS:
-        for i, w in enumerate(words):
-            if w[4].upper().replace(":", "").replace(".", "") != anchor[0]:
+    label_signed = 0
+    for key, labels in rows.items():
+        label_names = {l[0] for l in labels}
+        # Only process rows that have both CHKD and APVD (required pair)
+        if "CHKD" not in label_names or "APVD" not in label_names:
+            continue
+        signed_count = 0
+        for lname, lx0, ly0, lx1, ly1 in labels:
+            if lname not in REQUIRED:
                 continue
-            ok = all(
-                i+j < len(words) and
-                words[i+j][4].upper().replace(":", "").replace(".", "") == av
-                for j, av in enumerate(anchor[1:], 1)
-            )
-            if ok:
-                span = words[i:i+len(anchor)]
-                positions.append((
-                    (min(s[0] for s in span) + max(s[2] for s in span)) / 2,
-                    (min(s[1] for s in span) + max(s[3] for s in span)) / 2,
-                ))
-                break
+            if is_rotated:
+                # Content to the RIGHT of label in rotated drawings
+                content = page.get_text("text",
+                    clip=fitz.Rect(lx1, ly0-30, lx1+120, ly1+30)
+                ).strip().replace("\n", " ")
+            else:
+                # Content ABOVE label in normal drawings
+                content = page.get_text("text",
+                    clip=fitz.Rect(lx0-3, max(0, ly0-80), lx1+3, ly0)
+                ).strip().replace("\n", " ")
+            if _has_sig_content(content):
+                signed_count += 1
+        label_signed = max(label_signed, signed_count)
 
-    if len(positions) < 2:
-        return None
+    # ── Method 2: Digital sig text (Foxit DN: CN=) ───────────────────────────
+    dns        = re.findall(r"DN:\s*CN=([^,\n]+)", full)
+    signed_by  = re.findall(r"[Dd]igitally\s+signed\s+by\s+(\S+)", full)
+    digital_signed = max(len(dns), len(signed_by))
 
-    xs = [p[0] for p in positions]
-    ys = [p[1] for p in positions]
-    margin = 80
-    return (
-        max(0,  min(xs) - margin),
-        max(0,  min(ys) - margin),
-        min(pw, max(xs) + margin),
-        min(ph, max(ys) + margin),
-    )
+    # ── Method 3: Date cluster (scanned sigs) ────────────────────────────────
+    # Relaxed pattern handles dates split across lines: "2026.04.\n13"
+    DATE_PAT = re.compile(r"20\d{2}[.\-/]\d{2}")
+    date_blocks = []
+    for b in blocks:
+        if b[6] != 0:
+            continue
+        txt = b[4].replace("\x1f", " ").replace("\x00", " ").replace("\n", " ")
+        if DATE_PAT.search(txt):
+            date_blocks.append(b[1])  # store y-position
+
+    cluster_signed = 0
+    if len(date_blocks) >= 2:
+        y_range = max(date_blocks) - min(date_blocks)
+        if y_range < 150:  # all within 150pts = same sig block
+            cluster_signed = len(date_blocks)
+
+    # ── Take highest count from all methods ──────────────────────────────────
+    total  = max(label_signed, digital_signed, cluster_signed)
+    status = "PASS" if total >= 3 else "FAIL"
+    # Cap display at 3 — required is 3, showing more is confusing
+    display_count = min(total, 3)
+    return status, display_count
 
 
 def _check_classification(doc):
@@ -804,7 +813,7 @@ def generate_excel_report(results, transmittal_name=""):
             ws.cell(ri, 4,  r.get("docNoMatch", "WARN"))
             ws.cell(ri, 5,  r.get("cpyNoMatch", "WARN"))
             ws.cell(ri, 6,  r.get("revMatch", "WARN"))
-            ws.cell(ri, 7,  f"{sig_count}/5  {sig_res}")
+            ws.cell(ri, 7,  f"{sig_count}/3  {sig_res}")
             ws.cell(ri, 8,  r.get("commentsResult", "WARN"))
             ws.cell(ri, 9,  r.get("classificationResult", "WARN"))
             ws.cell(ri, 10, r.get("prevRevResult", "WARN"))
