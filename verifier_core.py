@@ -675,6 +675,63 @@ def _check_signatures(doc, page_type):
     return status, display_count
 
 
+def _find_title_block_region(page):
+    """Dynamically locate title block bounding box using anchor labels."""
+    words = page.get_text("words")
+    pw, ph = page.rect.width, page.rect.height
+    ANCHORS = [
+        ["CONTRACTOR", "DRAWING", "NO"], ["PROJECT", "NO"],
+        ["REVISION"], ["SCALE"], ["SHT"], ["DRN"], ["CHKD"], ["APVD"],
+    ]
+    positions = []
+    for anchor in ANCHORS:
+        for i, w in enumerate(words):
+            if w[4].upper().replace(":", "").replace(".", "") != anchor[0]:
+                continue
+            ok = all(
+                i+j < len(words) and
+                words[i+j][4].upper().replace(":", "").replace(".", "") == av
+                for j, av in enumerate(anchor[1:], 1)
+            )
+            if ok:
+                span = words[i:i+len(anchor)]
+                positions.append((
+                    (min(s[0] for s in span) + max(s[2] for s in span)) / 2,
+                    (min(s[1] for s in span) + max(s[3] for s in span)) / 2,
+                ))
+                break
+    if len(positions) < 2:
+        return None
+    xs = [p[0] for p in positions]
+    ys = [p[1] for p in positions]
+    margin = 80
+    return (max(0, min(xs)-margin), max(0, min(ys)-margin),
+            min(pw, max(xs)+margin), min(ph, max(ys)+margin))
+
+
+def _check_comments(pdf_bytes):
+    """Check for reviewer annotations/comments in the PDF."""
+    if not PYPDF_OK:
+        return "WARN", 0
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+        count  = 0
+        for pg in reader.pages:
+            annots = pg.get("/Annots")
+            if annots:
+                for ann in annots:
+                    try:
+                        ao  = ann.get_object()
+                        sub = str(ao.get("/Subtype", "")).replace(" ", "")
+                        if sub not in ("/Widget", "/Link"):
+                            count += 1
+                    except Exception:
+                        pass
+        return ("PASS" if count == 0 else "FAIL"), count
+    except Exception:
+        return "WARN", 0
+
+
 def _check_classification(doc):
     """
     Fully intelligent classification check — no pixels, no coordinates.
