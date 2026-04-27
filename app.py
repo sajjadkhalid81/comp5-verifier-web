@@ -14,47 +14,20 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 
-from flask import (Flask, request, jsonify, render_template,
-                   send_file)
+from flask import (Flask, request, jsonify, render_template, send_file)
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "comp5-verify-2026")
 
-# ── Job store — in-memory dict (fast, no disk overhead) ───────────────────────
+# ── In-memory job store ────────────────────────────────────────────────────────
+# NOTE: gunicorn MUST run with --workers 1 so all requests share this dict
 jobs      = {}
 jobs_lock = threading.Lock()
 
-def _get_job(job_id):
-    with jobs_lock:
-        return dict(jobs.get(job_id, {}))
-
-def _update_job(job_id, updates):
-    with jobs_lock:
-        if job_id not in jobs:
-            jobs[job_id] = {}
-        jobs[job_id].update(updates)
-
-def _append_log(job_id, msg):
-    with jobs_lock:
-        if job_id in jobs:
-            jobs[job_id].setdefault("log", []).append(msg)
-
-def _append_result(job_id, res):
-    with jobs_lock:
-        if job_id in jobs:
-            jobs[job_id].setdefault("results", []).append(res)
-            jobs[job_id]["progress"] = len(jobs[job_id]["results"])
-
-# ── Upload size ────────────────────────────────────────────────────────────────
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
-# ── Temp directory for uploaded files (disk, not RAM) ─────────────────────────
-UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "comp5_uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# ── Import verifier ────────────────────────────────────────────────────────────
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -77,7 +50,6 @@ def index():
 
 @app.route("/ping")
 def ping():
-    """Keepalive — called by frontend every 10s to prevent free-tier sleep."""
     return jsonify({"pong": True})
 
 
@@ -95,34 +67,20 @@ def health():
 
 @app.route("/api/verify", methods=["POST"])
 def start_verification():
-    """
-    Save uploaded files to DISK immediately — never hold in RAM.
-    Start background verification thread that reads from disk.
-    """
     if not VERIFIER_OK:
         return jsonify({"error": f"Verifier not loaded: {IMPORT_ERROR}"}), 500
 
     if "zip" not in request.files or "excel" not in request.files:
         return jsonify({"error": "Both ZIP and Excel files are required"}), 400
 
-    job_id   = str(uuid.uuid4())
-    job_dir  = os.path.join(UPLOAD_DIR, job_id)
-    os.makedirs(job_dir, exist_ok=True)
+    zip_file   = request.files["zip"]
+    excel_file = request.files["excel"]
+    zip_bytes   = zip_file.read()
+    excel_bytes = excel_file.read()
+    zip_name    = secure_filename(zip_file.filename)
+    excel_name  = secure_filename(excel_file.filename)
 
-    # Save directly to disk — DO NOT read into RAM
-    zip_path   = os.path.join(job_dir, "upload.zip")
-    excel_path = os.path.join(job_dir, "transmittal.xlsx")
-
-    try:
-        request.files["zip"].save(zip_path)
-        request.files["excel"].save(excel_path)
-    except Exception as e:
-        return jsonify({"error": f"Upload failed: {e}"}), 500
-
-    zip_name   = secure_filename(request.files["zip"].filename)
-    excel_name = secure_filename(request.files["excel"].filename)
-
-    # Create job record
+    job_id = str(uuid.uuid4())
     with jobs_lock:
         jobs[job_id] = {
             "status":     "running",
@@ -135,10 +93,9 @@ def start_verification():
             "started":    datetime.utcnow().isoformat(),
         }
 
-    # Start background thread — passes file PATHS, not bytes
     thread = threading.Thread(
         target=_run_verification,
-        args=(job_id, zip_path, excel_path),
+        args=(job_id, zip_bytes, excel_bytes),
         daemon=True
     )
     thread.start()
@@ -146,197 +103,113 @@ def start_verification():
     return jsonify({"job_id": job_id})
 
 
-def _make_error_result(short, row, error_msg):
-    """Standard error result dict."""
-    return {
-        "filename":     short,
-        "overallResult": "FAIL",
-        "issues":       f"Error: {error_msg}",
-        **{k: row.get(k, "") for k in ["srNo", "docNo", "cpyNo", "revision", "title"]},
-        **{k: "FAIL" for k in ["docNoMatch", "cpyNoMatch", "revMatch",
-                                "sigsResult", "commentsResult",
-                                "classificationResult", "prevRevResult", "titleMatch"]},
-        "sigCount": 0, "commentsCount": 0,
-        "classificationMissingPages": [],
-        "docNoFromPdf": "", "cpyNoFromPdf": "", "revFromPdf": "",
-    }
-
-
-def _run_verification(job_id, zip_path, excel_path):
-    """
-    Background worker.
-    Reads files from DISK paths — never holds entire ZIP in RAM.
-    Streams one PDF at a time from zipfile.
-    """
+def _run_verification(job_id, zip_bytes, excel_bytes):
     def log(msg):
-        _append_log(job_id, msg)
+        with jobs_lock:
+            if job_id in jobs:
+                jobs[job_id].setdefault("log", []).append(msg)
 
     try:
-        # ── Load Excel transmittal from disk ──────────────────────────────
         log("Parsing Excel transmittal...")
-        with open(excel_path, "rb") as f:
-            excel_bytes = f.read()
         transmittal = load_transmittal_excel(excel_bytes)
-        del excel_bytes  # free immediately
+        del excel_bytes
         log(f"Transmittal loaded: {len(transmittal)} drawings")
 
-        # ── CPY lookup map ────────────────────────────────────────────────
+        log("Reading ZIP file...")
+        pdf_entries = collect_pdfs_from_zip(zip_bytes)
+        del zip_bytes
+        log(f"Found {len(pdf_entries)} PDF(s) in ZIP")
+
         _CPY_RE = re.compile(r"(\d{3}-\d{2}-[A-Z]+-[A-Z]+-\d{4,5})", re.IGNORECASE)
         def _cpy(fn):
             m = _CPY_RE.search(fn)
             return re.sub(r"[\s\-_]", "", m.group(1) if m else fn).upper()
 
-        tmap = {
-            re.sub(r"[\s\-_]", "", r["cpyNo"]).upper(): r
-            for r in transmittal if r.get("cpyNo")
-        }
+        tmap = {re.sub(r"[\s\-_]","",r["cpyNo"]).upper(): r
+                for r in transmittal if r.get("cpyNo")}
+        matched = [(s, b, tmap[_cpy(s)]) for s, b in pdf_entries if _cpy(s) in tmap]
+        missing = [r for r in transmittal
+                   if r.get("cpyNo") and
+                   re.sub(r"[\s\-_]","",r["cpyNo"]).upper() not in {_cpy(s) for s,_ in pdf_entries}]
 
-        # ── Count total without loading all PDFs ──────────────────────────
-        def _count_and_list(zpath, depth=0):
-            """Recursively list PDF names from ZIP on disk. No bytes in RAM."""
-            names = []
-            if depth > 5: return names
+        total = len(matched) + len(missing)
+        with jobs_lock:
+            if job_id in jobs:
+                jobs[job_id]["total"] = total
+
+        results = []
+        for idx, (short, pdf_bytes_item, row) in enumerate(matched):
+            log(f"[{idx+1}/{total}] {short}")
             try:
-                with zipfile.ZipFile(zpath, "r") as z:
-                    for n in sorted(z.namelist()):
-                        if n.lower().endswith(".pdf"):
-                            names.append(n.split("/")[-1])
-                        elif n.lower().endswith(".zip"):
-                            # For nested ZIPs: extract to temp, recurse, delete
-                            tmp = os.path.join(
-                                tempfile.gettempdir(),
-                                f"comp5_inner_{job_id}_{depth}_{uuid.uuid4().hex[:6]}.zip"
-                            )
-                            try:
-                                with open(tmp, "wb") as f:
-                                    f.write(z.read(n))
-                                names.extend(_count_and_list(tmp, depth + 1))
-                            finally:
-                                try: os.remove(tmp)
-                                except: pass
+                res = verify_pdf(pdf_bytes_item, short, row)
             except Exception as e:
-                log(f"ZIP read warning: {e}")
-            return names
-
-        log("Scanning ZIP structure...")
-        all_pdf_names = _count_and_list(zip_path)
-        matched_cpys  = {_cpy(n) for n in all_pdf_names if _cpy(n) in tmap}
-        missing_rows  = [
-            r for r in transmittal
-            if r.get("cpyNo") and
-            re.sub(r"[\s\-_]", "", r["cpyNo"]).upper() not in matched_cpys
-        ]
-        total = len(matched_cpys) + len(missing_rows)
-        log(f"Found {len(all_pdf_names)} PDF(s) | {len(missing_rows)} missing | {total} total")
-        _update_job(job_id, {"total": total})
-
-        # ── Stream PDFs one at a time from disk ───────────────────────────
-        def _stream_from_disk(zpath, depth=0):
-            """
-            Yield (short_name, pdf_bytes) reading ONE PDF at a time.
-            For nested ZIPs: extract inner ZIP to temp file, recurse, delete.
-            Never holds more than ONE PDF in RAM at once.
-            """
-            if depth > 5: return
-            try:
-                with zipfile.ZipFile(zpath, "r") as z:
-                    for n in sorted(z.namelist()):
-                        short = n.split("/")[-1]
-                        if n.lower().endswith(".pdf"):
-                            yield short, z.read(n)   # ONE PDF at a time
-                        elif n.lower().endswith(".zip"):
-                            tmp = os.path.join(
-                                tempfile.gettempdir(),
-                                f"comp5_inner_{job_id}_{depth}_{uuid.uuid4().hex[:6]}.zip"
-                            )
-                            try:
-                                with open(tmp, "wb") as f:
-                                    f.write(z.read(n))
-                                yield from _stream_from_disk(tmp, depth + 1)
-                            finally:
-                                try: os.remove(tmp)
-                                except: pass
-            except Exception as e:
-                log(f"Stream warning: {e}")
-
-        results   = []
-        processed = set()
-        idx       = 0
-
-        for short, pdf_bytes in _stream_from_disk(zip_path):
-            key = _cpy(short)
-            if key not in tmap:
-                continue
-            processed.add(key)
-            row = tmap[key]
-            idx += 1
-            log(f"[{idx}/{total}] {short}")
-
-            try:
-                res = verify_pdf(pdf_bytes, short, row)
-            except Exception as e:
-                res = _make_error_result(short, row, str(e))
-
-            del pdf_bytes   # free PDF bytes immediately
-
+                res = {
+                    "filename": short, "overallResult": "FAIL",
+                    "issues": f"Error: {e}",
+                    **{k: row.get(k,"") for k in ["srNo","docNo","cpyNo","revision","title"]},
+                    **{k: "FAIL" for k in ["docNoMatch","cpyNoMatch","revMatch",
+                                            "sigsResult","commentsResult",
+                                            "classificationResult","prevRevResult","titleMatch"]},
+                    "sigCount": 0, "commentsCount": 0,
+                    "classificationMissingPages": [],
+                    "docNoFromPdf": "", "cpyNoFromPdf": "", "revFromPdf": "",
+                }
             results.append(res)
-            _append_result(job_id, res)
-            log(f"  → {res.get('overallResult', '?')}")
+            log(f"  → {res.get('overallResult','?')}")
+            with jobs_lock:
+                if job_id in jobs:
+                    jobs[job_id]["results"] = results[:]
+                    jobs[job_id]["progress"] = idx + 1
 
-        # ── Missing PDFs ──────────────────────────────────────────────────
-        for row in missing_rows:
+        for row in missing:
             res = {
-                "filename":      row.get("cpyNo", "?") + "_B.pdf",
+                "filename": row.get("cpyNo","?") + "_B.pdf",
                 "overallResult": "FAIL",
-                "issues":        "PDF NOT SUBMITTED",
-                **{k: row.get(k, "") for k in ["srNo", "docNo", "cpyNo", "revision", "title"]},
-                **{k: "FAIL" for k in ["docNoMatch", "cpyNoMatch", "revMatch",
-                                        "sigsResult", "commentsResult",
-                                        "classificationResult", "prevRevResult", "titleMatch"]},
+                "issues": "PDF NOT SUBMITTED",
+                **{k: row.get(k,"") for k in ["srNo","docNo","cpyNo","revision","title"]},
+                **{k: "FAIL" for k in ["docNoMatch","cpyNoMatch","revMatch",
+                                        "sigsResult","commentsResult",
+                                        "classificationResult","prevRevResult","titleMatch"]},
                 "sigCount": 0, "commentsCount": 0,
                 "classificationMissingPages": [],
                 "docNoFromPdf": "", "cpyNoFromPdf": "", "revFromPdf": "",
             }
             results.append(res)
-            _append_result(job_id, res)
-            log(f"[MISSING] {row.get('cpyNo', '?')} — not submitted")
+            log(f"[MISSING] {row.get('cpyNo','?')} — not submitted")
 
         summary = {
             "total":  len(results),
-            "passed": sum(1 for r in results if r["overallResult"] == "PASS"),
-            "failed": sum(1 for r in results if r["overallResult"] == "FAIL"),
-            "warned": sum(1 for r in results if r["overallResult"] == "WARN"),
+            "passed": sum(1 for r in results if r["overallResult"]=="PASS"),
+            "failed": sum(1 for r in results if r["overallResult"]=="FAIL"),
+            "warned": sum(1 for r in results if r["overallResult"]=="WARN"),
         }
         log(f"Complete: {summary['passed']} PASS | {summary['failed']} FAIL | {summary['warned']} WARN")
-        _update_job(job_id, {"status": "done", "summary": summary})
+        with jobs_lock:
+            if job_id in jobs:
+                jobs[job_id]["status"]  = "done"
+                jobs[job_id]["summary"] = summary
 
     except Exception as e:
         log(f"FATAL ERROR: {e}")
-        _update_job(job_id, {"status": "error", "error": str(e)})
-
-    finally:
-        # Clean up uploaded files from disk
-        try:
-            import shutil
-            shutil.rmtree(os.path.join(UPLOAD_DIR, job_id), ignore_errors=True)
-        except Exception:
-            pass
+        with jobs_lock:
+            if job_id in jobs:
+                jobs[job_id]["status"] = "error"
+                jobs[job_id]["error"]  = str(e)
 
 
 @app.route("/api/job/<job_id>")
 def job_status(job_id):
-    job = _get_job(job_id)
+    with jobs_lock:
+        job = dict(jobs.get(job_id, {}))
     if not job:
-        return jsonify({
-            "error": "Job not found — server may have restarted.",
-            "hint":  "Please run a new verification."
-        }), 404
+        return jsonify({"error": "Job not found"}), 404
     return jsonify(job)
 
 
 @app.route("/api/job/<job_id>/log")
 def job_log(job_id):
-    job = _get_job(job_id)
+    with jobs_lock:
+        job = dict(jobs.get(job_id, {}))
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify({"log": job.get("log", [])})
@@ -344,7 +217,8 @@ def job_log(job_id):
 
 @app.route("/api/job/<job_id>/download")
 def download_report(job_id):
-    job = _get_job(job_id)
+    with jobs_lock:
+        job = dict(jobs.get(job_id, {}))
     if not job:
         return jsonify({"error": "Job not found"}), 404
     results = job.get("results", [])
@@ -356,12 +230,9 @@ def download_report(job_id):
         buf  = BytesIO(excel_bytes)
         buf.seek(0)
         name = f"Verification_Report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
-        resp = send_file(
-            buf,
-            download_name=name,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True
-        )
+        resp = send_file(buf, download_name=name,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         as_attachment=True)
         resp.headers["Content-Disposition"] = f'attachment; filename="{name}"'
         return resp
     except Exception as e:
@@ -385,14 +256,12 @@ def tq_sdr_report():
         return jsonify({"error": "Excel file required"}), 400
     try:
         excel_bytes = request.files["excel"].read()
-        result = generate_tq_sdr_report(excel_bytes)
-        job_id = str(uuid.uuid4())
+        result  = generate_tq_sdr_report(excel_bytes)
+        job_id  = str(uuid.uuid4())
         with jobs_lock:
             jobs[job_id] = {
-                "status":  "done",
-                "type":    "tq_sdr",
-                "tqy":     result["tqy"],
-                "sdr":     result["sdr"],
+                "status": "done", "type": "tq_sdr",
+                "tqy": result["tqy"], "sdr": result["sdr"],
                 "summary": result["summary"],
             }
         return jsonify({"job_id": job_id, "summary": result["summary"]})
@@ -409,8 +278,7 @@ def download_tq_sdr(job_id, report_type):
     data = job.get(report_type)
     if not data:
         return jsonify({"error": "Invalid report type"}), 400
-    buf  = BytesIO(data)
-    buf.seek(0)
+    buf  = BytesIO(data); buf.seek(0)
     name = f"COMP5_{report_type.upper()}_Report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
     resp = send_file(buf, download_name=name,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -428,7 +296,7 @@ def comp5_weekly_report():
     if "excel" not in request.files:
         return jsonify({"error": "Excel file required"}), 400
     try:
-        excel_bytes = request.files["excel"].read()
+        excel_bytes  = request.files["excel"].read()
         report_bytes = generate_comp5_weekly_report(excel_bytes)
         job_id = str(uuid.uuid4())
         with jobs_lock:
@@ -444,8 +312,7 @@ def download_comp5_weekly(job_id):
         job = jobs.get(job_id)
     if not job or job.get("type") != "comp5_weekly":
         return jsonify({"error": "Report not found"}), 404
-    buf  = BytesIO(job["data"])
-    buf.seek(0)
+    buf  = BytesIO(job["data"]); buf.seek(0)
     name = f"COMP5_Weekly_Report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
     resp = send_file(buf, download_name=name,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
