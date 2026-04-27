@@ -103,6 +103,10 @@
           <div class="icon">🗜️</div>
           <div class="filename" id="zip-name">Click or drag ZIP here</div>
           <p>Supports flat ZIP, ZIP-in-ZIP (ST drawings)</p>
+          <p style="color:#f85149;font-weight:600;margin-top:6px;">
+            ⚠️ Maximum 100 drawings per batch.<br>
+            The Excel transmittal must list the same drawings only (max 100 rows).
+          </p>
         </div>
         <input type="file" id="zip-input" accept=".zip" hidden>
       </div>
@@ -197,6 +201,16 @@ function setFile(type, file) {
 
 async function startVerification() {
   if (!zipFile || !xlsxFile) return;
+
+  // Check ZIP file count before uploading
+  if (zipFile.size > 80 * 1024 * 1024) {
+    if (!confirm(
+      '⚠️ Warning: Your ZIP file is larger than 80MB.\n\n' +
+      'This system supports a maximum of 100 drawings per batch.\n' +
+      'Large files may cause the server to run out of memory.\n\n' +
+      'Are you sure you want to continue?'
+    )) return;
+  }
   document.getElementById('run-btn').disabled = true;
   document.getElementById('progress-section').style.display = 'block';
   document.getElementById('summary-section').style.display  = 'none';
