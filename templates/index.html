@@ -173,7 +173,7 @@
 </main>
 
 <script>
-let zipFile = null, xlsxFile = null, currentJobId = null, pollTimer = null, lastLogCount = 0;
+let zipFile = null, xlsxFile = null, currentJobId = null, pollTimer = null, keepaliveTimer = null, lastLogCount = 0;
 
 // File inputs
 document.getElementById('zip-input').onchange  = e => setFile('zip',  e.target.files[0]);
@@ -241,11 +241,31 @@ async function startVerification() {
   }
   currentJobId = data.job_id;
   pollTimer = setInterval(poll, 1200);
+  // Keepalive — ping server every 10s to prevent free-tier sleep during long jobs
+  keepaliveTimer = setInterval(async () => {
+    try { await fetch('/ping'); } catch(e) {}
+  }, 10000);
 }
 
 async function poll() {
   if (!currentJobId) return;
   const resp = await fetch('/api/job/' + currentJobId);
+  if (resp.status === 404) {
+    clearInterval(pollTimer);
+    clearInterval(keepaliveTimer);
+    // Server restarted — show how many results were saved
+    const done = document.getElementById('results-body').children.length;
+    const total = parseInt(document.getElementById('prog-label').textContent.split('/')[1]||'?');
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('run-btn').disabled = false;
+    alert(
+      'Server restarted during verification.\n\n' +
+      `✅ ${done} drawings were completed and saved.\n` +
+      `Please re-upload and run again to complete the remaining drawings.\n\n` +
+      'Tip: For large batches (100+ drawings), split into two ZIPs of ~80 drawings each.'
+    );
+    return;
+  }
   const job  = await resp.json();
 
   // Update log
@@ -276,6 +296,7 @@ async function poll() {
 
   if (job.status === 'done') {
     clearInterval(pollTimer);
+    clearInterval(keepaliveTimer);
     currentJobId = currentJobId;  // keep job id so download works
     const s = job.summary || {};
     document.getElementById('s-total').textContent = s.total || (job.results||[]).length || 0;
@@ -380,6 +401,7 @@ async function downloadReport() {
 function resetForm() {
   zipFile = xlsxFile = null; currentJobId = null; lastLogCount = 0;
   if (pollTimer) clearInterval(pollTimer);
+  if (keepaliveTimer) clearInterval(keepaliveTimer);
   ['zip-drop','xlsx-drop'].forEach(id => document.getElementById(id).classList.remove('has-file'));
   document.getElementById('zip-name').textContent  = 'Click or drag ZIP here';
   document.getElementById('xlsx-name').textContent = 'Click or drag Excel here';
