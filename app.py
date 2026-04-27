@@ -100,6 +100,12 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/ping")
+def ping():
+    """Keepalive endpoint — called by frontend every 10s during verification."""
+    return jsonify({"pong": True})
+
+
 @app.route("/health")
 def health():
     info = {
@@ -168,26 +174,67 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
         transmittal = load_transmittal_excel(excel_bytes)
         log(f"Transmittal loaded: {len(transmittal)} drawings")
 
-        log("Reading ZIP file (including nested ZIPs)...")
-        pdf_entries = collect_pdfs_from_zip(zip_bytes)
-        log(f"Found {len(pdf_entries)} PDF(s) in ZIP")
-
-        # CPY-based matching
+        # CPY lookup
         _CPY_RE = re.compile(r"(\d{3}-\d{2}-[A-Z]+-[A-Z]+-\d{4,5})", re.IGNORECASE)
         def _cpy(fn):
             m = _CPY_RE.search(fn)
             return re.sub(r"[\s\-_]", "", m.group(1) if m else fn).upper()
 
-        tmap = {re.sub(r"[\s\-_]","",r["cpyNo"]).upper(): r for r in transmittal if r.get("cpyNo")}
-        matched = [(s, b, tmap[_cpy(s)]) for s, b in pdf_entries if _cpy(s) in tmap]
-        missing = [r for r in transmittal if re.sub(r"[\s\-_]","",r["cpyNo"]).upper() not in {_cpy(s) for s,_ in pdf_entries}]
+        tmap = {re.sub(r"[\s\-_]","",r["cpyNo"]).upper(): r
+                for r in transmittal if r.get("cpyNo")}
 
-        total = len(matched) + len(missing)
+        # ── Scan ZIP to count PDFs (no extraction) ─────────────────────────
+        import zipfile as _zipfile
+        def _scan_zip_names(zdata, depth=0):
+            """Return list of PDF short names without extracting bytes."""
+            names = []
+            if depth > 5: return names
+            try:
+                with _zipfile.ZipFile(io.BytesIO(zdata)) as z:
+                    for n in sorted(z.namelist()):
+                        short = n.split("/")[-1]
+                        if n.lower().endswith(".pdf"):
+                            names.append(short)
+                        elif n.lower().endswith(".zip"):
+                            names.extend(_scan_zip_names(z.read(n), depth+1))
+            except Exception:
+                pass
+            return names
+
+        all_pdf_names = _scan_zip_names(zip_bytes)
+        matched_cpys  = {_cpy(n) for n in all_pdf_names if _cpy(n) in tmap}
+        missing_rows  = [r for r in transmittal
+                         if r.get("cpyNo") and
+                         re.sub(r"[\s\-_]","",r["cpyNo"]).upper() not in matched_cpys]
+        total = len(matched_cpys) + len(missing_rows)
+        log(f"Found {len(all_pdf_names)} PDF(s) — {len(missing_rows)} missing — {total} total")
         _update_job(job_id, {"total": total})
 
+        # ── Stream PDFs one-at-a-time — never all in memory ─────────────────
+        def _stream_pdfs(zdata, depth=0):
+            """Yield (short_name, pdf_bytes) one at a time, then free memory."""
+            if depth > 5: return
+            try:
+                with _zipfile.ZipFile(io.BytesIO(zdata)) as z:
+                    for n in sorted(z.namelist()):
+                        short = n.split("/")[-1]
+                        if n.lower().endswith(".pdf"):
+                            yield short, z.read(n)   # read ONE PDF
+                        elif n.lower().endswith(".zip"):
+                            yield from _stream_pdfs(z.read(n), depth+1)
+            except Exception:
+                pass
+
         results = []
-        for idx, (short, pdf_bytes_item, row) in enumerate(matched):
-            log(f"[{idx+1}/{total}] Verifying: {short}")
+        processed = set()
+        idx = 0
+        for short, pdf_bytes_item in _stream_pdfs(zip_bytes):
+            key = _cpy(short)
+            if key not in tmap: continue
+            processed.add(key)
+            row = tmap[key]
+            idx += 1
+            log(f"[{idx}/{total}] {short}")
             try:
                 res = verify_pdf(pdf_bytes_item, short, row)
             except Exception as e:
@@ -202,12 +249,12 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
                     "classificationMissingPages": [], "docNoFromPdf": "",
                     "cpyNoFromPdf": "", "revFromPdf": "",
                 }
+            del pdf_bytes_item   # free immediately after use
             _append_result(job_id, res)
-            ov = res.get("overallResult","FAIL")
-            log(f"  → {ov}")
+            log(f"  → {res.get('overallResult','?')}")
             results.append(res)
 
-        for row in missing:
+        for row in missing_rows:
             res = {
                 "filename": row.get("cpyNo","?") + "_B.pdf",
                 "overallResult": "FAIL",
@@ -221,6 +268,7 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
                 "cpyNoFromPdf": "", "revFromPdf": "",
             }
             results.append(res)
+            _append_result(job_id, res)
             log(f"[MISSING] {row.get('cpyNo','?')} — not submitted")
 
         summary = {
@@ -290,6 +338,101 @@ def download_report(job_id):
         return response
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Report routes ──────────────────────────────────────────────────────────
+
+@app.route("/reports")
+def reports_page():
+    return render_template("reports.html")
+
+
+@app.route("/api/tq-sdr-report", methods=["POST"])
+def tq_sdr_report():
+    """Generate TQ & SDR Excel reports from uploaded log file."""
+    try:
+        from report_core import generate_tq_sdr_report
+    except ImportError as e:
+        return jsonify({"error": f"report_core not available: {e}"}), 500
+
+    if "excel" not in request.files:
+        return jsonify({"error": "Excel file required"}), 400
+    try:
+        excel_bytes = request.files["excel"].read()
+        result = generate_tq_sdr_report(excel_bytes)
+        # Store in jobs store temporarily
+        job_id = str(uuid.uuid4())
+        with jobs_lock:
+            jobs[job_id] = {
+                "status": "done",
+                "type": "tq_sdr",
+                "tqy": result["tqy"],
+                "sdr": result["sdr"],
+                "summary": result["summary"],
+            }
+        return jsonify({"job_id": job_id, "summary": result["summary"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tq-sdr-report/<job_id>/<report_type>")
+def download_tq_sdr(job_id, report_type):
+    """Download TQY or SDR report."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job or job.get("type") != "tq_sdr":
+        return jsonify({"error": "Report not found"}), 404
+    data = job.get(report_type)
+    if not data:
+        return jsonify({"error": "Invalid report type"}), 400
+    buf  = BytesIO(data); buf.seek(0)
+    name = f"COMP5_{report_type.upper()}_Report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
+    resp = send_file(buf, download_name=name,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True)
+    resp.headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    return resp
+
+
+@app.route("/api/comp5-weekly-report", methods=["POST"])
+def comp5_weekly_report():
+    """Generate Weekly COMP5 Issued Documents report."""
+    try:
+        from report_core import generate_comp5_weekly_report
+    except ImportError as e:
+        return jsonify({"error": f"report_core not available: {e}"}), 500
+
+    if "excel" not in request.files:
+        return jsonify({"error": "Excel file required"}), 400
+    try:
+        excel_bytes = request.files["excel"].read()
+        report_bytes = generate_comp5_weekly_report(excel_bytes)
+        job_id = str(uuid.uuid4())
+        with jobs_lock:
+            jobs[job_id] = {
+                "status": "done",
+                "type": "comp5_weekly",
+                "data": report_bytes,
+            }
+        return jsonify({"job_id": job_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/comp5-weekly-report/<job_id>")
+def download_comp5_weekly(job_id):
+    """Download the weekly COMP5 report."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job or job.get("type") != "comp5_weekly":
+        return jsonify({"error": "Report not found"}), 404
+    buf  = BytesIO(job["data"]); buf.seek(0)
+    name = f"COMP5_Weekly_Report_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
+    resp = send_file(buf, download_name=name,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True)
+    resp.headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    return resp
 
 
 if __name__ == "__main__":
