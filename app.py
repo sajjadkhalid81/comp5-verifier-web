@@ -22,54 +22,30 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "comp5-verify-2026")
 
-# ── Job store — file-based so jobs survive server restarts ────────────────────
-import pickle, hashlib
-JOBS_DIR = "/tmp/comp5_jobs"
-os.makedirs(JOBS_DIR, exist_ok=True)
+# ── Job store — in-memory dict (fast) ────────────────────────────────────────
+jobs      = {}   # job_id → job dict
 jobs_lock = threading.Lock()
 
-def _job_path(job_id):
-    return os.path.join(JOBS_DIR, f"{job_id}.pkl")
-
-def _save_job(job_id, job):
-    try:
-        with open(_job_path(job_id), "wb") as f:
-            pickle.dump(job, f)
-    except Exception:
-        pass
-
-def _load_job(job_id):
-    try:
-        p = _job_path(job_id)
-        if os.path.exists(p):
-            with open(p, "rb") as f:
-                return pickle.load(f)
-    except Exception:
-        pass
-    return None
-
 def _get_job(job_id):
-    return _load_job(job_id)
+    with jobs_lock:
+        return jobs.get(job_id)
 
 def _update_job(job_id, updates):
     with jobs_lock:
-        job = _load_job(job_id) or {}
-        job.update(updates)
-        _save_job(job_id, job)
-    return job
+        if job_id not in jobs:
+            jobs[job_id] = {}
+        jobs[job_id].update(updates)
 
 def _append_log(job_id, msg):
     with jobs_lock:
-        job = _load_job(job_id) or {}
-        job.setdefault("log", []).append(msg)
-        _save_job(job_id, job)
+        if job_id in jobs:
+            jobs[job_id].setdefault("log", []).append(msg)
 
 def _append_result(job_id, res):
     with jobs_lock:
-        job = _load_job(job_id) or {}
-        job.setdefault("results", []).append(res)
-        job["progress"] = len(job["results"])
-        _save_job(job_id, job)
+        if job_id in jobs:
+            jobs[job_id].setdefault("results", []).append(res)
+            jobs[job_id]["progress"] = len(jobs[job_id]["results"])
 
 ALLOWED_EXTENSIONS = {".zip", ".xlsx", ".xls"}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024   # 500 MB
@@ -190,7 +166,7 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
             names = []
             if depth > 5: return names
             try:
-                with _zipfile.ZipFile(io.BytesIO(zdata)) as z:
+                with _zipfile.ZipFile(BytesIO(zdata)) as z:
                     for n in sorted(z.namelist()):
                         short = n.split("/")[-1]
                         if n.lower().endswith(".pdf"):
@@ -215,7 +191,7 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
             """Yield (short_name, pdf_bytes) one at a time, then free memory."""
             if depth > 5: return
             try:
-                with _zipfile.ZipFile(io.BytesIO(zdata)) as z:
+                with _zipfile.ZipFile(BytesIO(zdata)) as z:
                     for n in sorted(z.namelist()):
                         short = n.split("/")[-1]
                         if n.lower().endswith(".pdf"):
