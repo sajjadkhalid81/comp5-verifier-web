@@ -102,10 +102,9 @@
         <div class="drop-area" id="zip-drop" onclick="document.getElementById('zip-input').click()">
           <div class="icon">🗜️</div>
           <div class="filename" id="zip-name">Click or drag ZIP here</div>
-          <p>Supports flat ZIP, ZIP-in-ZIP (ST drawings)</p>
           <p style="color:#f85149;font-weight:600;margin-top:6px;">
-            ⚠️ Maximum 100 drawings per batch.<br>
-            The Excel transmittal must list the same drawings only (max 100 rows).
+            ⚠️ Maximum 50 drawings per batch.<br>
+            The Excel transmittal must list the same drawings only (max 50 rows).
           </p>
         </div>
         <input type="file" id="zip-input" accept=".zip" hidden>
@@ -206,7 +205,7 @@ async function startVerification() {
   if (zipFile.size > 80 * 1024 * 1024) {
     if (!confirm(
       '⚠️ Warning: Your ZIP file is larger than 80MB.\n\n' +
-      'This system supports a maximum of 100 drawings per batch.\n' +
+      'This system supports a maximum of 50 drawings per batch.\n' +
       'Large files may cause the server to run out of memory.\n\n' +
       'Are you sure you want to continue?'
     )) return;
@@ -276,7 +275,7 @@ async function poll() {
       'Server restarted during verification.\n\n' +
       `✅ ${done} drawings were completed and saved.\n` +
       `Please re-upload and run again to complete the remaining drawings.\n\n` +
-      'Tip: For large batches (100+ drawings), split into two ZIPs of ~80 drawings each.'
+      'Tip: For large batches (50+ drawings), split into two ZIPs of ~50 drawings each.'
     );
     return;
   }
@@ -362,7 +361,7 @@ function makeRow(r) {
     <td style="text-align:center;padding:6px 2px;">${pill(r.docNoMatch||'?')}</td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.cpyNoMatch||'?')}</td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.revMatch||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.sigsResult||'?')}<br><span style="color:var(--muted);font-size:9px;">${r.sigCount||0}/5</span></td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.sigsResult||'?')}<br><span style="color:var(--muted);font-size:9px;">${r.sigCount||0}/3</span></td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.commentsResult||'?')}</td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.classificationResult||'?')}</td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.prevRevResult||'?')}</td>
