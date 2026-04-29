@@ -155,6 +155,19 @@ def _run_verification(job_id, zip_bytes, excel_bytes):
         del zip_bytes
         log(f"Found {len(pdf_entries)} PDF(s) in ZIP")
 
+        # Hard limit — tested safe max is 80, buffer applied → block at 75
+        # UI tells users 50 (conservative guidance)
+        if len(pdf_entries) > 75:
+            _update_job(job_id, {
+                "status": "error",
+                "error": (
+                    f"Too many drawings: {len(pdf_entries)} found in ZIP. "
+                    f"Maximum allowed is 50 drawings per batch. "
+                    f"Please split into smaller ZIPs and run again."
+                )
+            })
+            return
+
         _CPY_RE = re.compile(r"(\d{3}-\d{2}-[A-Z]+-[A-Z]+-\d{4,5})", re.IGNORECASE)
         def _cpy(fn):
             m = _CPY_RE.search(fn)
