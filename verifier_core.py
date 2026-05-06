@@ -65,9 +65,12 @@ COORDS = {
     }
 }
 
-CLASSIF_REGION = (0, 0, 500, 80)
-DOC_NO_PATTERN = re.compile(r"\d{4,6}-[A-Z]-[A-Z0-9]+-\d+-[A-Z]+-[A-Z]+-[A-Z]+-\d+-\d+")
-CPY_RE         = re.compile(r"(\d{3}-\d{2}-[A-Z]+-[A-Z]+-\d{4,5})", re.IGNORECASE)
+CLASSIF_REGION    = (0, 0, 500, 80)
+DOC_NO_PATTERN    = re.compile(r"\d{4,6}-[A-Z]-[A-Z0-9]+-\d+-[A-Z]+-[A-Z]+-[A-Z]+-\d+-\d+")
+CPY_RE            = re.compile(r"(\d{3}-\d{2}-[A-Z]+-[A-Z]+-\d{4,5})", re.IGNORECASE)
+# COMP5 project number — fixed for all drawings, all disciplines, all modules
+COMP5_PROJECT_NO  = "LTC/C/NFP/6951/24"
+PROJ_NO_RE        = re.compile(r"LTC/C/NFP/[\d]+/[\d]+", re.IGNORECASE)
 
 
 def normalize(s):
@@ -216,6 +219,43 @@ def extract_text_at(page, coords):
     return page.get_text("text", clip=fitz.Rect(x0, top, x1, bot)).strip()
 
 
+def _check_project_no(doc):
+    """
+    Check COMP5 project number on ALL sheets of the PDF.
+
+    GOLDEN RULE: Label-driven. Find LTC/C/NFP/XXXX/XX pattern on each page.
+    Expected: LTC/C/NFP/6951/24 (fixed for all COMP5 drawings, all disciplines).
+
+    Returns:
+      PASS  — correct project no found on all pages
+      FAIL  — project no missing OR wrong on one or more pages
+    """
+    wrong_pages  = []
+    missing_pages = []
+
+    for i, page in enumerate(doc):
+        full = page.get_text("text").replace("\x1f", " ")
+        matches = PROJ_NO_RE.findall(full)
+
+        if not matches:
+            missing_pages.append(i + 1)
+        else:
+            # Check all found instances — any wrong one = FAIL
+            for m in matches:
+                if m.upper() != COMP5_PROJECT_NO.upper():
+                    wrong_pages.append((i + 1, m))
+                    break
+
+    if wrong_pages:
+        details = "; ".join(f"Sheet {p}: found {v}" for p, v in wrong_pages)
+        return "FAIL", f"Wrong project no — {details} (expected {COMP5_PROJECT_NO})"
+
+    if missing_pages:
+        return "FAIL", f"Project no not found on sheets: {missing_pages}"
+
+    return "PASS", ""
+
+
 def verify_pdf(pdf_bytes, filename, row):
     """
     Full 8-check verification of a single PDF.
@@ -261,45 +301,53 @@ def verify_pdf(pdf_bytes, filename, row):
         # 8 ── Title
         ttl_status, ttl_display = _check_title(page, excel_ttl)
 
-        # 9 ── Multi-sheet check (sheets 2+ if PDF has multiple pages)
-        # Each sheet has its own title block — verify Doc No, CPY No, Revision
-        # on every sheet, not just sheet 1.
-        # Signatures/Prev Rev: only on sheet 1 — no change needed.
-        # Classification: already checked across all pages by _check_classification(doc).
+        # 9 ── Project No — checked on ALL sheets
+        proj_status, proj_detail = _check_project_no(doc)
+
+        # 10 ── Multi-sheet check: Doc No + CPY No on sheets 2+
+        # Revision  → now handled by _check_revision (label-driven, all sheets)
+        # Signatures → now handled by _check_signatures (all sheets)
+        # Project No → handled by _check_project_no (all sheets)
+        # Classification → handled by _check_classification (all sheets)
+        # Only Doc No and CPY No still need explicit sheet-by-sheet verification here
+        # because _check_doc_no and _check_cpy_no only run on page 1
         sheet_issues = []
         if len(doc) > 1:
             for sheet_idx in range(1, len(doc)):
                 pg = doc[sheet_idx]
-                pg_type = get_page_type(pg)
                 sheet_num = sheet_idx + 1
 
-                # Doc No on this sheet
-                _, _, pg_doc = _check_doc_no(pg, pg_type, excel_doc)
+                # Locate title block on this sheet
+                tb = _find_title_block_region(pg)
+                if not tb:
+                    continue  # cannot locate title block — skip silently
+
+                # Extract text from title block region ONLY
+                tb_text = pg.get_text("text", clip=fitz.Rect(tb)).replace("\x1f", " ")
+
+                # Doc No — title block only
+                m = DOC_NO_PATTERN.search(tb_text)
+                pg_doc = m.group(0) if m else ""
                 if pg_doc and excel_doc and not doc_no_match(pg_doc, excel_doc):
                     sheet_issues.append(
-                        f"Sheet {sheet_num}: Doc No mismatch (PDF: {pg_doc} | Excel: {excel_doc})"
+                        f"Sheet {sheet_num}: Doc No mismatch "
+                        f"(PDF: {pg_doc} | Excel: {excel_doc})"
                     )
 
-                # CPY No on this sheet
-                _, _, pg_cpy = _check_cpy_no(pg, pg_type, filename, excel_cpy)
+                # CPY No — title block only (first match = the drawing's own CPY)
+                m = CPY_RE.search(tb_text)
+                pg_cpy = m.group(1) if m else ""
                 if pg_cpy and excel_cpy and not cpy_no_match(pg_cpy, excel_cpy):
                     sheet_issues.append(
-                        f"Sheet {sheet_num}: CPY No mismatch (PDF: {pg_cpy} | Excel: {excel_cpy})"
+                        f"Sheet {sheet_num}: CPY No mismatch "
+                        f"(PDF: {pg_cpy} | Excel: {excel_cpy})"
                     )
-
-                # Revision on this sheet — use coord extraction only (filename is same for all sheets)
-                raw_rev = extract_text_at(pg, COORDS["A1"]["revision"]).strip()
-                if raw_rev:
-                    pg_rev = raw_rev.upper()
-                    if excel_rev and pg_rev != excel_rev.upper():
-                        sheet_issues.append(
-                            f"Sheet {sheet_num}: Rev mismatch (PDF: {pg_rev} | Excel: {excel_rev})"
-                        )
 
         doc.close()
 
         hard_fail = any(s == "FAIL" for s in [
-            rev_status, sig_status, com_status, cls_status, doc_status, cpy_status
+            rev_status, sig_status, com_status, cls_status,
+            doc_status, cpy_status, proj_status
         ])
         # Sheet mismatches across pages = FAIL
         if sheet_issues:
@@ -307,21 +355,22 @@ def verify_pdf(pdf_bytes, filename, row):
 
         all_pass = all(s == "PASS" for s in [
             doc_status, cpy_status, rev_status, sig_status, com_status,
-            cls_status, prev_status, ttl_status
+            cls_status, prev_status, ttl_status, proj_status
         ]) and not sheet_issues
 
         overall = "FAIL" if hard_fail else ("PASS" if all_pass else "WARN")
 
         issues_parts = []
-        if doc_status == "FAIL": issues_parts.append(f"Doc No mismatch (PDF: {doc_from_pdf} | Excel: {excel_doc})")
-        if cpy_status == "FAIL": issues_parts.append(f"CPY No mismatch (PDF: {cpy_from_pdf} | Excel: {excel_cpy})")
-        if rev_status == "FAIL": issues_parts.append(f"Rev mismatch (PDF: {rev_from_pdf})")
-        if sig_status == "FAIL": issues_parts.append(f"Insufficient signatures — found {sig_count}, required 3 (DRN/BY + CHKD + APVD)")
-        if com_status == "FAIL": issues_parts.append(f"{com_count} comment(s)")
-        if cls_status == "FAIL": issues_parts.append(f"Classification missing on pages: {cls_missing}")
-        if cls_status == "WARN": issues_parts.append(f"Classification not found on pages: {cls_missing}")
+        if doc_status  == "FAIL": issues_parts.append(f"Doc No mismatch (PDF: {doc_from_pdf} | Excel: {excel_doc})")
+        if cpy_status  == "FAIL": issues_parts.append(f"CPY No mismatch (PDF: {cpy_from_pdf} | Excel: {excel_cpy})")
+        if rev_status  == "FAIL": issues_parts.append(f"Rev mismatch (PDF: {rev_from_pdf})")
+        if sig_status  == "FAIL": issues_parts.append(f"Insufficient signatures — found {sig_count}, required 3 (DRN/BY + CHKD + APVD)")
+        if com_status  == "FAIL": issues_parts.append(f"{com_count} comment(s)")
+        if cls_status  == "FAIL": issues_parts.append(f"Classification missing on pages: {cls_missing}")
+        if cls_status  == "WARN": issues_parts.append(f"Classification not found on pages: {cls_missing}")
+        if proj_status == "FAIL": issues_parts.append(proj_detail)
         if prev_status == "WARN": issues_parts.append("Prev rev not confirmed")
-        if ttl_status == "WARN": issues_parts.append("Title not confirmed")
+        if ttl_status  == "WARN": issues_parts.append("Title not confirmed")
         issues_parts.extend(sheet_issues)
 
         return {
@@ -344,6 +393,7 @@ def verify_pdf(pdf_bytes, filename, row):
             "commentsCount":       com_count,
             "classificationResult":      cls_status,
             "classificationMissingPages": cls_missing,
+            "projNoResult":  proj_status,
             "prevRevResult": prev_status,
             "titleMatch":    ttl_status,
             "overallResult": overall,
@@ -368,6 +418,7 @@ def _error_result(filename, row, error_msg):
         "sigsResult": "FAIL", "sigCount": 0,
         "commentsResult": "FAIL", "commentsCount": 0,
         "classificationResult": "FAIL", "classificationMissingPages": [],
+        "projNoResult": "FAIL",
         "prevRevResult": "FAIL", "titleMatch": "FAIL",
         "overallResult": "FAIL",
         "issues": f"Error: {error_msg}",
@@ -533,15 +584,32 @@ def _check_cpy_no(page, page_type, filename, excel_val):
 
 def _check_revision(page, page_type, filename, excel_val):
     """
-    Compare PDF revision against the Excel transmittal value.
-    Uses Excel value — NOT a hardcoded constant — so any revision letter works.
-    P&ID drawings at Rev A, architectural at Rev B, etc. all handled correctly.
+    Label-driven revision check — same philosophy as all other checks.
+
+    GOLDEN RULE: Find the label, read the value. No hardcoded coordinates.
+
+    Two REVISION occurrences exist on every drawing:
+      1. REVISIONS (history table header) — WRONG — not preceded by SIZE
+      2. REVISION  (title block field)    — CORRECT — preceded by SIZE or SHT
+
+    Strategy:
+      1. Find REVISION label preceded by SIZE (title block field — correct one)
+      2. Read value BELOW that label
+      3. Fallback: filename suffix (_B.pdf) — still reliable for sheet 1
+      4. Compare against Excel revision value
     """
     expected = str(excel_val or "").strip().upper()
     if not expected:
         expected = REQUIRED_REVISION  # fallback if Excel cell is blank
 
-    # Method 1: revision letter from filename (most reliable — e.g. _A.pdf, _B.pdf)
+    # Method 1 — Label-driven: find REVISION preceded by SIZE in title block
+    rev = _get_revision_from_label(page)
+    if rev:
+        if rev == expected:
+            return "PASS", f"✓ {rev}", rev
+        return "FAIL", rev, rev
+
+    # Method 2 — Filename suffix fallback (e.g. _B.pdf)
     m = re.search(r"_([A-Za-z])\.pdf$", filename, re.IGNORECASE)
     if m:
         rev = m.group(1).upper()
@@ -549,29 +617,34 @@ def _check_revision(page, page_type, filename, excel_val):
             return "PASS", f"✓ {rev}", rev
         return "FAIL", rev, rev
 
-    # Method 2: coordinate extraction from title block (A1 standard drawings)
-    raw = extract_text_at(page, COORDS["A1"]["revision"]).strip()
-    if raw:
-        rev = raw.strip().upper()
-        if rev == expected:
-            return "PASS", f"✓ {rev}", rev
-        return "FAIL", rev, rev
-
-    # Method 3: full-page text search for revision letter near SHT/REVISION block
-    full = page.get_text("text").replace("\x1f", " ")
-    idx = full.upper().find("SHT")
-    if idx >= 0:
-        ctx = full[max(0, idx-20):idx+80]
-        # Pattern: "200-20-PR-PID-00182 0001 A" — last token before next block
-        tokens = ctx.split()
-        for tok in reversed(tokens):
-            if re.match(r"^[A-Z]$", tok.upper()):
-                rev = tok.upper()
-                if rev == expected:
-                    return "PASS", f"✓ {rev}", rev
-                return "FAIL", rev, rev
-
     return "WARN", f"?/{expected}", ""
+
+
+def _get_revision_from_label(page):
+    """
+    Find the REVISION label in the title block (preceded by SIZE or SHT)
+    and read the value directly below it.
+    Returns revision letter string or empty string if not found.
+    """
+    words = page.get_text("words")
+    for j, w in enumerate(words):
+        if w[4].upper() != "REVISION":
+            continue
+        # Must be preceded by SIZE or SHT — confirms this is the title block field
+        prev2 = words[j-2][4].upper().replace(".", "").strip() if j >= 2 else ""
+        prev1 = words[j-1][4].upper().replace(".", "").strip() if j >= 1 else ""
+        if "SIZE" not in (prev1, prev2) and "SHT" not in (prev1, prev2):
+            continue
+        # Read value directly BELOW this label
+        lx0, ly0, lx1, ly1 = w[:4]
+        for w2 in words:
+            if (w2[1] >= ly1 and w2[1] <= ly1 + 30
+                    and w2[0] >= lx0 - 10 and w2[2] <= lx1 + 20):
+                val = w2[4].strip().upper()
+                if re.match(r"^[A-Z][0-9]?$", val):  # single letter or A1/B1 etc.
+                    return val
+    return ""
+
 
 
 def _detect_rotation(page):
@@ -622,6 +695,7 @@ def _has_sig_content(text):
 def _check_signatures(doc, page_type):
     """
     Universal signature check — label-driven, no fixed coordinates.
+    Checks ALL sheets — signatures appear in title block on every sheet.
 
     Handles all drawing types and signature styles:
     - AB Architectural: DRN / CHKD / APVD labels in horizontal row
@@ -640,80 +714,87 @@ def _check_signatures(doc, page_type):
         Finds date blocks (20XX.MM pattern) clustered in same area.
         Count of clustered dates = count of signers.
 
-    Required: >= 3 signed cells for PASS.
+    Required: >= 3 signed cells per sheet for PASS.
+    If ANY sheet fails signatures → overall FAIL.
     """
-    page = doc[0]
-    words  = page.get_text("words")
-    full   = page.get_text("text").replace("\x1f", " ")
-    blocks = page.get_text("blocks")
+    from collections import defaultdict
 
     SIG_LABELS = {"BY", "DRN", "CHKD", "APVD", "DSGND"}
     REQUIRED   = {"BY", "DRN", "CHKD", "APVD"}
+    DATE_PAT   = re.compile(r"20\d{2}[.\-/]\d{2}")
 
-    is_rotated = _detect_rotation(page)
+    failed_sheets  = []
+    min_count      = 3  # start high — will be reduced to minimum found
 
-    # ── Method 1: Label-proximity ─────────────────────────────────────────────
-    from collections import defaultdict
-    rows = defaultdict(list)
-    for w in words:
-        clean = w[4].upper().replace(":", "").replace(".", "").strip()
-        if clean in SIG_LABELS:
-            # Group by y (normal) or x (rotated)
-            key = round((w[0] if is_rotated else w[1]) / 8) * 8
-            rows[key].append((clean, w[0], w[1], w[2], w[3]))
+    for sheet_idx, page in enumerate(doc):
+        sheet_num = sheet_idx + 1
+        words  = page.get_text("words")
+        full   = page.get_text("text").replace("\x1f", " ")
+        blocks = page.get_text("blocks")
 
-    label_signed = 0
-    for key, labels in rows.items():
-        label_names = {l[0] for l in labels}
-        # Only process rows that have both CHKD and APVD (required pair)
-        if "CHKD" not in label_names or "APVD" not in label_names:
-            continue
-        signed_count = 0
-        for lname, lx0, ly0, lx1, ly1 in labels:
-            if lname not in REQUIRED:
+        is_rotated = _detect_rotation(page)
+
+        # ── Method 1: Label-proximity ─────────────────────────────────────────
+        rows = defaultdict(list)
+        for w in words:
+            clean = w[4].upper().replace(":", "").replace(".", "").strip()
+            if clean in SIG_LABELS:
+                key = round((w[0] if is_rotated else w[1]) / 8) * 8
+                rows[key].append((clean, w[0], w[1], w[2], w[3]))
+
+        label_signed = 0
+        for key, labels in rows.items():
+            label_names = {l[0] for l in labels}
+            if "CHKD" not in label_names or "APVD" not in label_names:
                 continue
-            if is_rotated:
-                # Content to the RIGHT of label in rotated drawings
-                content = page.get_text("text",
-                    clip=fitz.Rect(lx1, ly0-30, lx1+120, ly1+30)
-                ).strip().replace("\n", " ")
-            else:
-                # Content ABOVE label in normal drawings
-                content = page.get_text("text",
-                    clip=fitz.Rect(lx0-3, max(0, ly0-80), lx1+3, ly0)
-                ).strip().replace("\n", " ")
-            if _has_sig_content(content):
-                signed_count += 1
-        label_signed = max(label_signed, signed_count)
+            signed_count = 0
+            for lname, lx0, ly0, lx1, ly1 in labels:
+                if lname not in REQUIRED:
+                    continue
+                if is_rotated:
+                    content = page.get_text("text",
+                        clip=fitz.Rect(lx1, ly0-30, lx1+120, ly1+30)
+                    ).strip().replace("\n", " ")
+                else:
+                    content = page.get_text("text",
+                        clip=fitz.Rect(lx0-3, max(0, ly0-80), lx1+3, ly0)
+                    ).strip().replace("\n", " ")
+                if _has_sig_content(content):
+                    signed_count += 1
+            label_signed = max(label_signed, signed_count)
 
-    # ── Method 2: Digital sig text (Foxit DN: CN=) ───────────────────────────
-    dns        = re.findall(r"DN:\s*CN=([^,\n]+)", full)
-    signed_by  = re.findall(r"[Dd]igitally\s+signed\s+by\s+(\S+)", full)
-    digital_signed = max(len(dns), len(signed_by))
+        # ── Method 2: Digital sig text (Foxit DN: CN=) ───────────────────────
+        dns        = re.findall(r"DN:\s*CN=([^,\n]+)", full)
+        signed_by  = re.findall(r"[Dd]igitally\s+signed\s+by\s+(\S+)", full)
+        digital_signed = max(len(dns), len(signed_by))
 
-    # ── Method 3: Date cluster (scanned sigs) ────────────────────────────────
-    # Relaxed pattern handles dates split across lines: "2026.04.\n13"
-    DATE_PAT = re.compile(r"20\d{2}[.\-/]\d{2}")
-    date_blocks = []
-    for b in blocks:
-        if b[6] != 0:
-            continue
-        txt = b[4].replace("\x1f", " ").replace("\x00", " ").replace("\n", " ")
-        if DATE_PAT.search(txt):
-            date_blocks.append(b[1])  # store y-position
+        # ── Method 3: Date cluster (scanned sigs) ────────────────────────────
+        date_blocks = []
+        for b in blocks:
+            if b[6] != 0:
+                continue
+            txt = b[4].replace("\x1f", " ").replace("\x00", " ").replace("\n", " ")
+            if DATE_PAT.search(txt):
+                date_blocks.append(b[1])
 
-    cluster_signed = 0
-    if len(date_blocks) >= 2:
-        y_range = max(date_blocks) - min(date_blocks)
-        if y_range < 150:  # all within 150pts = same sig block
-            cluster_signed = len(date_blocks)
+        cluster_signed = 0
+        if len(date_blocks) >= 2:
+            y_range = max(date_blocks) - min(date_blocks)
+            if y_range < 150:
+                cluster_signed = len(date_blocks)
 
-    # ── Take highest count from all methods ──────────────────────────────────
-    total  = max(label_signed, digital_signed, cluster_signed)
-    status = "PASS" if total >= 3 else "FAIL"
-    # Cap display at 3 — required is 3, showing more is confusing
-    display_count = min(total, 3)
-    return status, display_count
+        # ── Sheet result ──────────────────────────────────────────────────────
+        sheet_total = max(label_signed, digital_signed, cluster_signed)
+        if sheet_total < 3:
+            failed_sheets.append(sheet_num)
+        min_count = min(min_count, sheet_total)
+
+    if failed_sheets:
+        display_count = min(min_count, 3)
+        return "FAIL", display_count
+
+    return "PASS", 3
+
 
 
 def _find_title_block_region(page):
@@ -869,19 +950,95 @@ def _check_prev_rev(page):
 
 
 def _check_title(page, expected):
+    """
+    Label-driven title check — same philosophy as Doc No, CPY No, Classification.
+
+    GOLDEN RULE: Find the label, read the value. No hardcoded coordinates.
+
+    Strategy:
+      1. Find the word TITLE that is preceded by DRAWING + NO
+         (Excludes "REFERENCE DRAWINGS TITLE" column header and "PROJECT TITLE :")
+      2. Read words to the RIGHT of label (same y-band) — catches first word e.g. "ARCHITECTURAL"
+      3. Read words BELOW the label (within 80pts) — catches rest of multi-line title
+      4. Stop at "SCALE" or "PROJECT" keywords — excludes scale/project no noise
+      5. Filter single characters — excludes stray border markers (e.g. "H")
+      6. Compare assembled title words against Excel title (70%+ keyword match = PASS)
+    """
     if not expected:
         return "WARN", "(no title in Excel)"
-    text  = page.get_text("text")
-    words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", expected.upper()).split() if len(w) > 2}
-    found = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", text.upper()).split()       if len(w) > 2}
-    if not words:
+
+    words = page.get_text("words")
+
+    # Step 1: Find the correct TITLE label
+    # Must be preceded by DRAWING + NO (not REFERENCE DRAWINGS or PROJECT TITLE)
+    title_label = None
+    for j, w in enumerate(words):
+        clean = w[4].upper().replace(":", "").replace(".", "").strip()
+        if clean != "TITLE":
+            continue
+        prev2 = words[j-2][4].upper().replace(":","").replace(".","").strip() if j >= 2 else ""
+        prev1 = words[j-1][4].upper().replace(":","").replace(".","").strip() if j >= 1 else ""
+        if prev2 == "DRAWING" and prev1 == "NO":
+            title_label = w
+            break
+
+    if not title_label:
+        return "WARN", "(TITLE label not found)"
+
+    lx0, ly0, lx1, ly1 = title_label[:4]
+    STOP_WORDS = {"SCALE", "PROJECT", "DRAWING", "NTS", "NO", "LTC", "SIZE", "REVISION"}
+
+    # Step 2: Read words to the RIGHT of label (same y-band)
+    right_words = []
+    for w2 in words:
+        if len(w2[4].strip()) <= 1:
+            continue  # skip single chars including ":"
+        if "/" in w2[4]:
+            continue  # skip project reference codes like LTC/C/NFP/6951/24
+        clean2 = w2[4].upper().replace(":", "").replace(".", "").strip()
+        if clean2 in STOP_WORDS:
+            continue
+        if (abs((w2[1]+w2[3])/2 - (ly0+ly1)/2) < 8 and w2[0] >= lx1):
+            right_words.append((w2[0], w2[4]))
+    right_words.sort()
+
+    # Step 3: Read words BELOW the label (within 80pts, same x band)
+    below_words = []
+    for w2 in words:
+        if w2[1] < ly1 or w2[1] > ly1 + 80:
+            continue
+        if w2[0] < lx0 - 50:
+            continue
+        if len(w2[4].strip()) <= 1:
+            continue  # skip single chars (stray border markers like "H")
+        if "/" in w2[4]:
+            continue  # skip project reference codes like LTC/C/NFP/6951/24
+        clean2 = w2[4].upper().replace(":", "").replace(".", "").strip()
+        if clean2 in STOP_WORDS:
+            continue  # skip stop words — do NOT break (order not guaranteed)
+        below_words.append((w2[1], w2[0], w2[4]))
+    below_words.sort()
+
+    # Assemble full title
+    pdf_title = " ".join([t[1] for t in right_words] +
+                          [t[2] for t in below_words])
+
+    if not pdf_title.strip():
+        return "WARN", "(title text not readable)"
+
+    # Step 4: Keyword match — 70%+ words from Excel title found in PDF title
+    exp_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", expected.upper()).split() if len(w) > 2}
+    pdf_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", pdf_title.upper()).split() if len(w) > 2}
+
+    if not exp_words:
         return "WARN", "(empty title)"
-    pct = len(words & found) / len(words)
+
+    pct = len(exp_words & pdf_words) / len(exp_words)
     if pct >= 0.70:
-        return "PASS", expected
+        return "PASS", pdf_title
     if pct >= 0.50:
-        return "PASS", f"{expected}  |  Remark: partial {int(pct*100)}% match"
-    return "WARN", expected
+        return "PASS", f"{pdf_title}  |  Remark: partial {int(pct*100)}% match"
+    return "WARN", pdf_title
 
 
 def generate_excel_report(results, transmittal_name=""):
@@ -895,7 +1052,7 @@ def generate_excel_report(results, transmittal_name=""):
     ws.title = "Verification"
     headers = ["Sr.", "Filename", "Doc No (Excel)", "Doc No Match",
                "CPY Match", "Rev Match", "Signatures", "Comments",
-               "Classification", "Prev Rev", "Title", "RESULT", "Issues"]
+               "Classification", "Project No", "Prev Rev", "Title", "RESULT", "Issues"]
     for c, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=c, value=h)
         cell.fill = PatternFill("solid", fgColor="1F2937")
@@ -914,13 +1071,14 @@ def generate_excel_report(results, transmittal_name=""):
             ws.cell(ri, 7,  f"{sig_count}/3  {sig_res}")
             ws.cell(ri, 8,  r.get("commentsResult", "WARN"))
             ws.cell(ri, 9,  r.get("classificationResult", "WARN"))
-            ws.cell(ri, 10, r.get("prevRevResult", "WARN"))
-            ws.cell(ri, 11, r.get("titleMatch", "WARN"))
-            ws.cell(ri, 12, ov)
-            ws.cell(ri, 13, str(r.get("issues", "")))
+            ws.cell(ri, 10, r.get("projNoResult", "WARN"))
+            ws.cell(ri, 11, r.get("prevRevResult", "WARN"))
+            ws.cell(ri, 12, r.get("titleMatch", "WARN"))
+            ws.cell(ri, 13, ov)
+            ws.cell(ri, 14, str(r.get("issues", "")))
             color = "1E8449" if ov=="PASS" else "C0392B" if ov=="FAIL" else "D68910"
-            ws.cell(ri, 12).fill = PatternFill("solid", fgColor=color)
-            ws.cell(ri, 12).font = Font(bold=True, color="FFFFFF")
+            ws.cell(ri, 13).fill = PatternFill("solid", fgColor=color)
+            ws.cell(ri, 13).font = Font(bold=True, color="FFFFFF")
         except Exception:
             pass   # never let one bad row break the whole report
     buf = BytesIO()
