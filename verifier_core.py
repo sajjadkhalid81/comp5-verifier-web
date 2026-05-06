@@ -360,6 +360,16 @@ def verify_pdf(pdf_bytes, filename, row):
 
         overall = "FAIL" if hard_fail else ("PASS" if all_pass else "WARN")
 
+        # If sheet_issues contains doc/cpy/rev failures from other sheets,
+        # update the main column status to FAIL so UI shows FAIL not PASS
+        for issue in sheet_issues:
+            if "Doc No mismatch" in issue:
+                doc_status = "FAIL"
+            if "CPY No mismatch" in issue:
+                cpy_status = "FAIL"
+            if "Rev mismatch" in issue:
+                rev_status = "FAIL"
+
         issues_parts = []
         if doc_status  == "FAIL": issues_parts.append(f"Doc No mismatch (PDF: {doc_from_pdf} | Excel: {excel_doc})")
         if cpy_status  == "FAIL": issues_parts.append(f"CPY No mismatch (PDF: {cpy_from_pdf} | Excel: {excel_cpy})")
