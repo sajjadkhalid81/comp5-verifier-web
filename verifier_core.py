@@ -1052,7 +1052,7 @@ def generate_excel_report(results, transmittal_name=""):
     ws.title = "Verification"
     headers = ["Sr.", "Filename", "Doc No (Excel)", "Doc No Match",
                "CPY Match", "Rev Match", "Signatures", "Comments",
-               "Classification", "Prev Rev", "Title", "RESULT", "Issues"]
+               "Classification", "Project No", "Prev Rev", "Title", "RESULT", "Issues"]
     for c, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=c, value=h)
         cell.fill = PatternFill("solid", fgColor="1F2937")
@@ -1071,13 +1071,14 @@ def generate_excel_report(results, transmittal_name=""):
             ws.cell(ri, 7,  f"{sig_count}/3  {sig_res}")
             ws.cell(ri, 8,  r.get("commentsResult", "WARN"))
             ws.cell(ri, 9,  r.get("classificationResult", "WARN"))
-            ws.cell(ri, 10, r.get("prevRevResult", "WARN"))
-            ws.cell(ri, 11, r.get("titleMatch", "WARN"))
-            ws.cell(ri, 12, ov)
-            ws.cell(ri, 13, str(r.get("issues", "")))
+            ws.cell(ri, 10, r.get("projNoResult", "WARN"))
+            ws.cell(ri, 11, r.get("prevRevResult", "WARN"))
+            ws.cell(ri, 12, r.get("titleMatch", "WARN"))
+            ws.cell(ri, 13, ov)
+            ws.cell(ri, 14, str(r.get("issues", "")))
             color = "1E8449" if ov=="PASS" else "C0392B" if ov=="FAIL" else "D68910"
-            ws.cell(ri, 12).fill = PatternFill("solid", fgColor=color)
-            ws.cell(ri, 12).font = Font(bold=True, color="FFFFFF")
+            ws.cell(ri, 13).fill = PatternFill("solid", fgColor=color)
+            ws.cell(ri, 13).font = Font(bold=True, color="FFFFFF")
         except Exception:
             pass   # never let one bad row break the whole report
     buf = BytesIO()
