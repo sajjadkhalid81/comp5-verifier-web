@@ -162,6 +162,7 @@
             <th style="width:68px">Sigs</th>
             <th style="width:48px">Cmts</th>
             <th style="width:52px">Class.</th>
+            <th style="width:62px">Proj No</th>
             <th style="width:62px">Prev Rev</th>
             <th style="width:48px">Title</th>
             <th style="width:62px">RESULT</th>
@@ -364,6 +365,7 @@ function makeRow(r) {
     <td style="text-align:center;padding:6px 2px;">${pill(r.sigsResult||'?')}<br><span style="color:var(--muted);font-size:9px;">${r.sigCount||0}/3</span></td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.commentsResult||'?')}</td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.classificationResult||'?')}</td>
+    <td style="text-align:center;padding:6px 2px;">${pill(r.projNoResult||'?')}</td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.prevRevResult||'?')}</td>
     <td style="text-align:center;padding:6px 2px;">${pill(r.titleMatch||'?')}</td>
     <td style="text-align:center;padding:6px 4px;font-weight:700;">${pill(ov)}</td>
