@@ -360,6 +360,16 @@ def verify_pdf(pdf_bytes, filename, row):
 
         overall = "FAIL" if hard_fail else ("PASS" if all_pass else "WARN")
 
+        # If sheet_issues contains doc/cpy/rev failures from other sheets,
+        # update the main column status to FAIL so UI shows FAIL not PASS
+        for issue in sheet_issues:
+            if "Doc No mismatch" in issue:
+                doc_status = "FAIL"
+            if "CPY No mismatch" in issue:
+                cpy_status = "FAIL"
+            if "Rev mismatch" in issue:
+                rev_status = "FAIL"
+
         issues_parts = []
         if doc_status  == "FAIL": issues_parts.append(f"Doc No mismatch (PDF: {doc_from_pdf} | Excel: {excel_doc})")
         if cpy_status  == "FAIL": issues_parts.append(f"CPY No mismatch (PDF: {cpy_from_pdf} | Excel: {excel_cpy})")
@@ -1026,18 +1036,21 @@ def _check_title(page, expected):
     if not pdf_title.strip():
         return "WARN", "(title text not readable)"
 
-    # Step 4: Keyword match — 70%+ words from Excel title found in PDF title
-    exp_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", expected.upper()).split() if len(w) > 2}
-    pdf_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", pdf_title.upper()).split() if len(w) > 2}
+    # Step 4: Keyword match
+    # Filter: only words >3 chars — removes noise words (FOR, AND, AIR, THE)
+    # that inflate match percentage and cause false PASS on similar-looking titles.
+    # Threshold: 85% required for PASS (raised from 70%)
+    exp_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", expected.upper()).split() if len(w) > 3}
+    pdf_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", pdf_title.upper()).split() if len(w) > 3}
 
     if not exp_words:
         return "WARN", "(empty title)"
 
     pct = len(exp_words & pdf_words) / len(exp_words)
-    if pct >= 0.70:
+    if pct >= 0.85:
         return "PASS", pdf_title
-    if pct >= 0.50:
-        return "PASS", f"{pdf_title}  |  Remark: partial {int(pct*100)}% match"
+    if pct >= 0.60:
+        return "WARN", f"{pdf_title}  |  Remark: partial match {int(pct*100)}% — verify title manually"
     return "WARN", pdf_title
 
 
