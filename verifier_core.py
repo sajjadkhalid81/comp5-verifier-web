@@ -261,15 +261,55 @@ def verify_pdf(pdf_bytes, filename, row):
         # 8 ── Title
         ttl_status, ttl_display = _check_title(page, excel_ttl)
 
+        # 9 ── Multi-sheet check (sheets 2+ if PDF has multiple pages)
+        # Each sheet has its own title block — verify Doc No, CPY No, Revision
+        # on every sheet, not just sheet 1.
+        # Signatures/Prev Rev: only on sheet 1 — no change needed.
+        # Classification: already checked across all pages by _check_classification(doc).
+        sheet_issues = []
+        if len(doc) > 1:
+            for sheet_idx in range(1, len(doc)):
+                pg = doc[sheet_idx]
+                pg_type = get_page_type(pg)
+                sheet_num = sheet_idx + 1
+
+                # Doc No on this sheet
+                _, _, pg_doc = _check_doc_no(pg, pg_type, excel_doc)
+                if pg_doc and excel_doc and not doc_no_match(pg_doc, excel_doc):
+                    sheet_issues.append(
+                        f"Sheet {sheet_num}: Doc No mismatch (PDF: {pg_doc} | Excel: {excel_doc})"
+                    )
+
+                # CPY No on this sheet
+                _, _, pg_cpy = _check_cpy_no(pg, pg_type, filename, excel_cpy)
+                if pg_cpy and excel_cpy and not cpy_no_match(pg_cpy, excel_cpy):
+                    sheet_issues.append(
+                        f"Sheet {sheet_num}: CPY No mismatch (PDF: {pg_cpy} | Excel: {excel_cpy})"
+                    )
+
+                # Revision on this sheet — use coord extraction only (filename is same for all sheets)
+                raw_rev = extract_text_at(pg, COORDS["A1"]["revision"]).strip()
+                if raw_rev:
+                    pg_rev = raw_rev.upper()
+                    if excel_rev and pg_rev != excel_rev.upper():
+                        sheet_issues.append(
+                            f"Sheet {sheet_num}: Rev mismatch (PDF: {pg_rev} | Excel: {excel_rev})"
+                        )
+
         doc.close()
 
         hard_fail = any(s == "FAIL" for s in [
             rev_status, sig_status, com_status, cls_status, doc_status, cpy_status
         ])
+        # Sheet mismatches across pages = FAIL
+        if sheet_issues:
+            hard_fail = True
+
         all_pass = all(s == "PASS" for s in [
             doc_status, cpy_status, rev_status, sig_status, com_status,
             cls_status, prev_status, ttl_status
-        ])
+        ]) and not sheet_issues
+
         overall = "FAIL" if hard_fail else ("PASS" if all_pass else "WARN")
 
         issues_parts = []
@@ -282,6 +322,7 @@ def verify_pdf(pdf_bytes, filename, row):
         if cls_status == "WARN": issues_parts.append(f"Classification not found on pages: {cls_missing}")
         if prev_status == "WARN": issues_parts.append("Prev rev not confirmed")
         if ttl_status == "WARN": issues_parts.append("Title not confirmed")
+        issues_parts.extend(sheet_issues)
 
         return {
             "filename":    filename,
