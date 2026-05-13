@@ -347,7 +347,7 @@ def verify_pdf(pdf_bytes, filename, row):
 
         hard_fail = any(s == "FAIL" for s in [
             rev_status, sig_status, com_status, cls_status,
-            doc_status, cpy_status, proj_status
+            doc_status, cpy_status, proj_status, ttl_status
         ])
         # Sheet mismatches across pages = FAIL
         if sheet_issues:
@@ -380,6 +380,7 @@ def verify_pdf(pdf_bytes, filename, row):
         if cls_status  == "WARN": issues_parts.append(f"Classification not found on pages: {cls_missing}")
         if proj_status == "FAIL": issues_parts.append(proj_detail)
         if prev_status == "WARN": issues_parts.append("Prev rev not confirmed")
+        if ttl_status  == "FAIL": issues_parts.append(ttl_display)
         if ttl_status  == "WARN": issues_parts.append("Title not confirmed")
         issues_parts.extend(sheet_issues)
 
@@ -961,26 +962,24 @@ def _check_prev_rev(page):
 
 def _check_title(page, expected):
     """
-    Label-driven title check — same philosophy as Doc No, CPY No, Classification.
+    Label-driven title check — direct string comparison.
 
     GOLDEN RULE: Find the label, read the value. No hardcoded coordinates.
+    No word counting. No percentage matching. Direct string comparison only.
 
-    Strategy:
-      1. Find the word TITLE that is preceded by DRAWING + NO
-         (Excludes "REFERENCE DRAWINGS TITLE" column header and "PROJECT TITLE :")
-      2. Read words to the RIGHT of label (same y-band) — catches first word e.g. "ARCHITECTURAL"
-      3. Read words BELOW the label (within 80pts) — catches rest of multi-line title
-      4. Stop at "SCALE" or "PROJECT" keywords — excludes scale/project no noise
-      5. Filter single characters — excludes stray border markers (e.g. "H")
-      6. Compare assembled title words against Excel title (70%+ keyword match = PASS)
+    Method:
+      1. Find TITLE label preceded by DRAWING NO
+      2. Read words RIGHT of label + BELOW label (within 80pts)
+      3. Normalize both strings — uppercase, remove punctuation, collapse spaces
+      4. Direct string comparison — exact match = PASS
+      5. If not matching — return both strings so QC engineer sees the difference
     """
     if not expected:
         return "WARN", "(no title in Excel)"
 
     words = page.get_text("words")
 
-    # Step 1: Find the correct TITLE label
-    # Must be preceded by DRAWING + NO (not REFERENCE DRAWINGS or PROJECT TITLE)
+    # Step 1: Find correct TITLE label — must be preceded by DRAWING + NO
     title_label = None
     for j, w in enumerate(words):
         clean = w[4].upper().replace(":", "").replace(".", "").strip()
@@ -993,65 +992,79 @@ def _check_title(page, expected):
             break
 
     if not title_label:
-        return "WARN", "(TITLE label not found)"
+        return "WARN", "(TITLE label not found — verify manually)"
 
     lx0, ly0, lx1, ly1 = title_label[:4]
-    STOP_WORDS = {"SCALE", "PROJECT", "DRAWING", "NTS", "NO", "LTC", "SIZE", "REVISION"}
+    STOP_WORDS = {"SCALE", "PROJECT", "DRAWING", "NTS", "SIZE", "REVISION", "NO"}
 
     # Step 2: Read words to the RIGHT of label (same y-band)
+    # Keep "-" — it is part of the title and must be compared
     right_words = []
     for w2 in words:
-        if len(w2[4].strip()) <= 1:
-            continue  # skip single chars including ":"
-        if "/" in w2[4]:
-            continue  # skip project reference codes like LTC/C/NFP/6951/24
-        clean2 = w2[4].upper().replace(":", "").replace(".", "").strip()
-        if clean2 in STOP_WORDS:
-            continue
-        if (abs((w2[1]+w2[3])/2 - (ly0+ly1)/2) < 8 and w2[0] >= lx1):
-            right_words.append((w2[0], w2[4]))
+        txt = w2[4].strip()
+        if len(txt) == 0 or "/" in txt or txt == ":": continue
+        if len(txt) == 1 and txt != "-": continue  # skip single chars except dash
+        if txt.upper().replace(":","").replace(".","").strip() in STOP_WORDS: continue
+        if abs((w2[1]+w2[3])/2 - (ly0+ly1)/2) < 8 and w2[0] >= lx1:
+            right_words.append((w2[0], txt))
     right_words.sort()
 
-    # Step 3: Read words BELOW the label (within 80pts, same x band)
+    # Step 3: Read words BELOW the label (within 70pts)
+    # Keep "-" — it is part of the title and must be compared
     below_words = []
     for w2 in words:
-        if w2[1] < ly1 or w2[1] > ly1 + 80:
-            continue
-        if w2[0] < lx0 - 50:
-            continue
-        if len(w2[4].strip()) <= 1:
-            continue  # skip single chars (stray border markers like "H")
-        if "/" in w2[4]:
-            continue  # skip project reference codes like LTC/C/NFP/6951/24
-        clean2 = w2[4].upper().replace(":", "").replace(".", "").strip()
-        if clean2 in STOP_WORDS:
-            continue  # skip stop words — do NOT break (order not guaranteed)
-        below_words.append((w2[1], w2[0], w2[4]))
+        txt = w2[4].strip()
+        if w2[1] < ly1 or w2[1] > ly1 + 70 or w2[0] < lx0 - 50: continue
+        if len(txt) == 0 or "/" in txt or txt == ":": continue
+        if len(txt) == 1 and txt != "-": continue  # skip single chars except dash
+        if re.match(r"^\d+$", txt): continue  # skip pure numbers (scale, SHT)
+        if txt.upper().replace(":","").replace(".","").strip() in STOP_WORDS: continue
+        below_words.append((w2[1], w2[0], txt))
     below_words.sort()
 
-    # Assemble full title
-    pdf_title = " ".join([t[1] for t in right_words] +
-                          [t[2] for t in below_words])
+    # Assemble full title from PDF
+    pdf_title = " ".join(
+        [t[1] for t in right_words] +
+        [t[2] for t in below_words]
+    ).strip()
 
-    if not pdf_title.strip():
-        return "WARN", "(title text not readable)"
+    if not pdf_title:
+        return "WARN", "(title text not readable — verify manually)"
 
-    # Step 4: Keyword match
-    # Filter: only words >3 chars — removes noise words (FOR, AND, AIR, THE)
-    # that inflate match percentage and cause false PASS on similar-looking titles.
-    # Threshold: 85% required for PASS (raised from 70%)
-    exp_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", expected.upper()).split() if len(w) > 3}
-    pdf_words = {w for w in re.sub(r"[^A-Za-z0-9 ]", " ", pdf_title.upper()).split() if len(w) > 3}
+    # Step 4: Normalize both — uppercase, remove noise punctuation, collapse spaces
+    # KEEP "-" dash — it is meaningful in titles and must be compared
+    def normalize(s):
+        s = s.upper().strip()
+        s = re.sub(r"[^A-Z0-9 \-]", " ", s)   # keep letters, numbers, spaces, dash
+        s = re.sub(r"\s*-\s*", " - ", s)        # normalize spacing around dash
+        s = re.sub(r"\s+", " ", s)              # collapse multiple spaces
+        return s.strip()
 
-    if not exp_words:
-        return "WARN", "(empty title)"
-
-    pct = len(exp_words & pdf_words) / len(exp_words)
-    if pct >= 0.85:
+    # Step 5: Direct comparison
+    if normalize(pdf_title) == normalize(expected):
         return "PASS", pdf_title
-    if pct >= 0.60:
-        return "WARN", f"{pdf_title}  |  Remark: partial match {int(pct*100)}% — verify title manually"
-    return "WARN", pdf_title
+
+    # Not matching — find exact reason
+    pdf_norm = normalize(pdf_title)
+    exp_norm = normalize(expected)
+
+    # Find what is extra in PDF vs Excel and what is missing
+    pdf_parts = pdf_norm.split()
+    exp_parts = exp_norm.split()
+
+    extra   = [w for w in pdf_parts if w not in exp_parts]
+    missing = [w for w in exp_parts if w not in pdf_parts]
+
+    reasons = []
+    if extra:
+        reasons.append(f"extra in PDF: {' '.join(extra)}")
+    if missing:
+        reasons.append(f"missing in PDF: {' '.join(missing)}")
+    if not reasons:
+        reasons.append("text order or spacing differs")
+
+    reason_str = " | ".join(reasons)
+    return "FAIL", f"Title mismatch — {reason_str} | PDF: [{pdf_title}] | Excel: [{expected}]"
 
 
 def generate_excel_report(results, transmittal_name=""):
