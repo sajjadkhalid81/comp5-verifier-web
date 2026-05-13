@@ -5,179 +5,676 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>COMP5 Drawing Verification — QatarEnergy LNG / Saipem JV</title>
 <style>
-  :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #e6edf3; --muted: #8b949e;
-    --green: #3fb950; --red: #f85149; --amber: #d29922;
-    --blue: #1f6feb; --blue-hover: #388bfd;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+:root {
+  --navy: #1a2744;
+  --navy-dark: #0f1b36;
+  --amber: #f59e0b;
+  --amber-light: #fef3c7;
+  --sidebar-w: 210px;
+  --topbar-h: 52px;
+  --qa-h: 46px;
+  --green: #16a34a;
+  --green-bg: #dcfce7;
+  --red: #dc2626;
+  --red-bg: #fee2e2;
+  --amber-muted: #d97706;
+  --amber-muted-bg: #fef3c7;
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-400: #9ca3af;
+  --gray-600: #4b5563;
+  --gray-800: #1f2937;
+  --text: #111827;
+  --text-muted: #6b7280;
+  --text-light: #9ca3af;
+  --border: #e5e7eb;
+  --surface: #ffffff;
+  --page-bg: #f4f5f7;
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--page-bg); color: var(--text); display: flex; height: 100vh; overflow: hidden; }
 
-  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 16px; }
-  header h1 { font-size: 18px; font-weight: 600; }
-  header .sub { font-size: 12px; color: var(--muted); }
-  .badge { background: #1f6feb22; color: #58a6ff; border: 1px solid #1f6feb; border-radius: 12px; padding: 2px 10px; font-size: 11px; }
+/* ── SIDEBAR ── */
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--navy);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: fixed;
+  left: 0; top: 0;
+  z-index: 100;
+}
+.sb-brand {
+  padding: 16px 14px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sb-logo {
+  width: 30px; height: 30px;
+  background: var(--amber);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  font-size: 16px;
+}
+.sb-title { font-size: 13px; font-weight: 600; color: #fff; line-height: 1.2; }
+.sb-sub { font-size: 9px; color: rgba(255,255,255,.4); margin-top: 1px; }
+.sb-nav { flex: 1; padding: 10px 8px; overflow-y: auto; }
+.sb-section {
+  font-size: 9px; font-weight: 600;
+  color: rgba(255,255,255,.3);
+  text-transform: uppercase; letter-spacing: .09em;
+  padding: 12px 8px 4px;
+}
+.sb-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: 6px;
+  font-size: 11px; color: rgba(255,255,255,.55);
+  cursor: pointer; margin-bottom: 1px;
+  text-decoration: none;
+  transition: background .15s, color .15s;
+}
+.sb-item svg { width: 15px; height: 15px; flex-shrink: 0; opacity: .7; }
+.sb-item.active { background: rgba(255,255,255,.1); color: #fff; }
+.sb-item.active svg { opacity: 1; color: var(--amber); }
+.sb-item:hover:not(.active) { background: rgba(255,255,255,.06); color: rgba(255,255,255,.8); }
+.sb-badge {
+  margin-left: auto;
+  background: #e24b4a; color: #fff;
+  font-size: 8px; padding: 1px 5px; border-radius: 99px;
+  min-width: 16px; text-align: center;
+}
+.sb-user {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255,255,255,.08);
+  display: flex; align-items: center; gap: 8px;
+}
+.sb-avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--amber);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; color: var(--navy);
+  flex-shrink: 0;
+}
+.sb-uname { font-size: 10px; color: rgba(255,255,255,.65); line-height: 1.3; }
+.sb-urole { font-size: 8px; color: rgba(255,255,255,.3); }
 
-  main { max-width: 1400px; margin: 24px auto; padding: 0 16px; }
+/* ── MAIN AREA ── */
+.main-wrap {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+.topbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  height: var(--topbar-h);
+  padding: 0 20px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+.tb-left { display: flex; align-items: center; gap: 8px; }
+.tb-page { font-size: 14px; font-weight: 600; color: var(--text); }
+.tb-right { display: flex; align-items: center; gap: 10px; }
+.live-badge {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10px; color: var(--green);
+  background: var(--green-bg);
+  border: .5px solid #86efac;
+  padding: 3px 9px; border-radius: 99px;
+}
+.live-dot {
+  width: 5px; height: 5px;
+  background: var(--green); border-radius: 50%;
+  animation: blink 2s infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+.tb-date { font-size: 10px; color: var(--text-light); }
 
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px; }
-  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
+/* Quick actions */
+.qa-bar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  height: var(--qa-h);
+  padding: 0 20px;
+  display: flex; align-items: center; gap: 7px;
+  flex-shrink: 0;
+}
+.qa-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 12px; border-radius: 6px;
+  font-size: 11px; font-weight: 500;
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--surface); color: var(--gray-600);
+  white-space: nowrap;
+  transition: background .15s;
+}
+.qa-btn:hover { background: var(--gray-50); }
+.qa-btn.primary { background: var(--navy); color: var(--amber); border-color: var(--navy); }
+.qa-btn.primary:hover { background: var(--navy-dark); }
+.qa-btn svg { width: 13px; height: 13px; }
+.qa-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
 
-  .drop-area { border: 2px dashed var(--border); border-radius: 8px; padding: 32px; text-align: center; cursor: pointer; transition: all .2s; }
-  .drop-area:hover, .drop-area.drag-over { border-color: var(--blue); background: #1f6feb11; }
-  .drop-area.has-file { border-color: var(--green); background: #3fb95011; }
-  .drop-area p { color: var(--muted); font-size: 13px; margin-top: 6px; }
-  .drop-area .icon { font-size: 32px; }
-  .drop-area .filename { color: var(--green); font-weight: 600; margin-top: 8px; }
+/* Scroll content */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
 
-  .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+/* Upload grid */
+.upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.drop-area {
+  background: var(--surface);
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 16px;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.drop-area:hover { border-color: var(--navy); background: #eff6ff22; }
+.drop-area.drag-over { border-color: var(--amber); background: #fef9ec; }
+.drop-area.has-file { border-style: solid; border-color: var(--amber); background: #fef9ec; }
+.drop-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.drop-ico {
+  width: 36px; height: 36px; border-radius: 8px;
+  background: var(--gray-100);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; font-size: 18px;
+  transition: background .2s;
+}
+.drop-area.has-file .drop-ico { background: var(--amber-light); }
+.drop-name { font-size: 12px; font-weight: 500; color: var(--text); }
+.drop-sub { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.drop-chip {
+  display: inline-block; font-size: 10px;
+  padding: 2px 9px; border-radius: 99px;
+  background: var(--green-bg); color: #166534;
+  margin-top: 6px;
+}
+.drop-hint { font-size: 10px; color: var(--text-light); margin-top: 6px; }
 
-  button { background: var(--blue); color: white; border: none; border-radius: 8px; padding: 12px 28px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; transition: background .2s; }
-  button:hover:not(:disabled) { background: var(--blue-hover); }
-  button:disabled { background: #21262d; color: var(--muted); cursor: not-allowed; }
+/* Warn bar */
+.warn-bar {
+  background: #fffbeb; border: .5px solid #fde68a;
+  border-radius: var(--radius);
+  padding: 9px 13px; font-size: 11px; color: #92400e;
+  display: flex; align-items: center; gap: 7px;
+}
+.warn-bar svg { width: 14px; height: 14px; color: var(--amber-muted); flex-shrink: 0; }
 
-  /* Progress */
-  #progress-section { display: none; }
-  .progress-bar-wrap { background: #21262d; border-radius: 4px; height: 8px; overflow: hidden; margin: 12px 0; }
-  .progress-bar { background: var(--blue); height: 100%; width: 0%; transition: width .3s; border-radius: 4px; }
-  .progress-label { font-size: 12px; color: var(--muted); }
+/* Run button */
+.run-btn {
+  width: 100%; padding: 12px;
+  background: var(--navy); color: var(--amber);
+  border: none; border-radius: var(--radius-lg);
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  transition: background .15s;
+}
+.run-btn:hover:not(:disabled) { background: var(--navy-dark); }
+.run-btn:disabled { background: var(--gray-200); color: var(--text-light); cursor: not-allowed; }
+.run-btn svg { width: 15px; height: 15px; }
 
-  /* Log */
-  #log-box { background: #010409; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; height: 160px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 12px; }
-  .log-pass  { color: var(--green); }
-  .log-fail  { color: var(--red); }
-  .log-warn  { color: var(--amber); }
-  .log-info  { color: var(--muted); }
+/* Progress */
+#progress-section { display: none; }
+.progress-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 18px;
+}
+.progress-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+.prog-bar-wrap { background: var(--gray-100); border-radius: 4px; height: 7px; overflow: hidden; margin: 8px 0; }
+.prog-bar { background: var(--navy); height: 100%; width: 0%; transition: width .3s; border-radius: 4px; }
+.prog-label { font-size: 11px; color: var(--text-muted); }
+.log-box {
+  background: #1e1e2e; border: 1px solid var(--border);
+  border-radius: 7px; padding: 10px 14px;
+  height: 130px; overflow-y: auto;
+  font-family: 'Courier New', monospace; font-size: 11px;
+  margin-top: 10px;
+}
+.log-pass { color: #4ade80; }
+.log-fail { color: #f87171; }
+.log-warn { color: #fbbf24; }
+.log-info { color: #94a3b8; }
 
-  /* Summary cards */
-  #summary-section { display: none; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-  .summary-card { background: #161b22; border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
-  .summary-card .val { font-size: 36px; font-weight: 700; font-family: monospace; }
-  .summary-card .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; }
-  .val-green { color: var(--green); }
-  .val-red   { color: var(--red); }
-  .val-amber { color: var(--amber); }
-  .val-white { color: var(--text); }
+/* Stats */
+#summary-section { display: none; }
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.stat-card {
+  background: var(--surface);
+  border: .5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  border-left: 3px solid;
+  display: flex; align-items: center; gap: 10px;
+}
+.stat-card.total { border-left-color: var(--navy); }
+.stat-card.passed { border-left-color: var(--green); }
+.stat-card.failed { border-left-color: var(--red); }
+.stat-card.warned { border-left-color: var(--amber-muted); }
+.stat-ico {
+  width: 32px; height: 32px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.stat-ico svg { width: 16px; height: 16px; }
+.stat-card.total  .stat-ico { background: #eff6ff; color: var(--navy); }
+.stat-card.passed .stat-ico { background: var(--green-bg); color: var(--green); }
+.stat-card.failed .stat-ico { background: var(--red-bg); color: var(--red); }
+.stat-card.warned .stat-ico { background: var(--amber-muted-bg); color: var(--amber-muted); }
+.stat-n { font-size: 24px; font-weight: 600; color: var(--text); line-height: 1; }
+.stat-card.passed .stat-n { color: var(--green); }
+.stat-card.failed .stat-n { color: var(--red); }
+.stat-card.warned .stat-n { color: var(--amber-muted); }
+.stat-l { font-size: 10px; color: var(--text-light); margin-top: 2px; }
 
-  /* Results table */
-  #results-section { display: none; }
-  .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
-  th { background: #21262d; color: var(--muted); padding: 8px 4px; text-align: center; font-weight: 500; white-space: nowrap; border-bottom: 1px solid var(--border); font-size: 10px; }
-  td { padding: 7px 4px; border-bottom: 1px solid #21262d; vertical-align: middle; }
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: #21262d44; }
+/* Results */
+#results-section { display: none; }
+.results-head {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.results-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  display: flex; align-items: center; gap: 7px;
+}
+.results-title svg { width: 16px; height: 16px; color: var(--text-light); }
+.results-actions { display: flex; gap: 8px; }
 
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .pill-pass  { background: #3fb95022; color: var(--green); border: 1px solid #3fb95044; }
-  .pill-fail  { background: #f8514922; color: var(--red);   border: 1px solid #f8514944; }
-  .pill-warn  { background: #d2992222; color: var(--amber); border: 1px solid #d2992244; }
+/* Grouped table */
+.table-wrap {
+  background: var(--surface);
+  border: .5px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+}
+.group-header-row {
+  display: grid;
+  grid-template-columns: 26px 185px repeat(10, minmax(42px,1fr)) 70px minmax(130px,1fr);
+  background: var(--gray-50);
+  border-bottom: .5px solid var(--border);
+}
+.gh {
+  padding: 5px 4px;
+  font-size: 8px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-light);
+  text-align: center;
+  border-right: .5px solid var(--border);
+}
+.gh:last-child { border-right: none; text-align: left; padding-left: 8px; }
+.gh.first { text-align: left; padding-left: 10px; }
+.gh.checks {
+  background: #eff6ff; color: var(--navy);
+  border-top: 2px solid var(--navy);
+  grid-column: span 10;
+}
+.gh.result {
+  background: #f0fdf4; color: #166534;
+  border-top: 2px solid var(--green);
+}
 
-  .actions { display: flex; gap: 12px; margin-top: 16px; }
-  .actions button { width: auto; padding: 10px 20px; font-size: 13px; }
-  .btn-secondary { background: #21262d; border: 1px solid var(--border); }
-  .btn-secondary:hover:not(:disabled) { background: #30363d; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 900px; }
+thead th {
+  font-size: 8px; font-weight: 600; color: var(--text-light);
+  text-transform: uppercase; letter-spacing: .05em;
+  padding: 7px 3px; text-align: center;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--border);
+  border-right: .5px solid var(--border);
+  white-space: nowrap;
+}
+thead th:last-child { border-right: none; text-align: left; padding-left: 8px; }
+thead th.th-sr { width: 26px; }
+thead th.th-fn { text-align: left; padding-left: 10px; width: 185px; }
+thead th.th-res { width: 70px; }
+thead th.th-iss { text-align: left; padding-left: 8px; min-width: 130px; }
+
+td {
+  padding: 8px 3px; text-align: center;
+  border-bottom: .5px solid #f3f4f6;
+  border-right: .5px solid #f3f4f6;
+  vertical-align: middle;
+  font-size: 10px; color: var(--text);
+}
+td:last-child { border-right: none; text-align: left; padding-left: 8px; padding-right: 8px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--gray-50); }
+
+.td-sr { text-align: center !important; color: var(--text-light); font-size: 10px; }
+.td-fn { text-align: left !important; padding-left: 10px !important; }
+.fn-wrap { display: flex; align-items: center; gap: 6px; }
+.fn-ico {
+  width: 22px; height: 22px; border-radius: 4px;
+  background: #eff6ff; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.fn-ico svg { width: 11px; height: 11px; color: var(--navy); }
+.fn-text { font-family: 'Courier New', monospace; font-size: 9px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 145px; }
+.fn-sheets { font-size: 8px; color: var(--text-light); }
+
+/* Pills */
+.pill {
+  display: inline-flex; align-items: center; gap: 2px;
+  font-size: 8px; font-weight: 600;
+  padding: 2px 6px; border-radius: 99px;
+}
+.pill svg { width: 9px; height: 9px; }
+.pill-pass { background: var(--green-bg); color: #166534; }
+.pill-fail { background: var(--red-bg); color: #991b1b; }
+.pill-warn { background: var(--amber-muted-bg); color: #92400e; }
+
+/* Sigs dots */
+.sigs-dots { display: flex; align-items: center; justify-content: center; gap: 3px; }
+.sig-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.sig-dot.off { background: #fca5a5; }
+
+/* Result badge */
+.res-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9px; font-weight: 600;
+  padding: 3px 8px; border-radius: 5px;
+}
+.res-badge svg { width: 10px; height: 10px; }
+.res-pass { background: var(--green); color: #fff; }
+.res-fail { background: var(--red); color: #fff; }
+.res-warn { background: var(--amber-muted); color: #fff; }
+
+/* Issues */
+.td-iss { font-size: 9px !important; color: var(--text-muted) !important; line-height: 1.4; }
+.iss-tag {
+  display: inline-block; font-size: 7px; font-weight: 700;
+  padding: 1px 4px; border-radius: 3px;
+  text-transform: uppercase; letter-spacing: .04em;
+  margin-right: 3px;
+}
+.iss-tag.fail { background: var(--red-bg); color: #991b1b; }
+.iss-tag.warn { background: var(--amber-muted-bg); color: #92400e; }
+.iss-none { color: #d1d5db !important; }
+
+/* Action buttons bottom */
+.bottom-actions { display: flex; gap: 10px; }
+.btn-dl {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 18px; border-radius: 7px;
+  background: var(--navy); color: var(--amber);
+  border: none; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: background .15s;
+}
+.btn-dl:hover { background: var(--navy-dark); }
+.btn-dl svg { width: 14px; height: 14px; }
+.btn-secondary {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 18px; border-radius: 7px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: background .15s;
+}
+.btn-secondary:hover { background: var(--gray-50); }
+.btn-secondary svg { width: 14px; height: 14px; }
 </style>
 </head>
 <body>
 
-<header>
-  <div>
-    <h1>COMP5 Drawing Verification Assistant</h1>
-    <div class="sub">Automated 8-check verification — QatarEnergy LNG / Saipem JV</div>
+<!-- SIDEBAR -->
+<div class="sidebar">
+  <div class="sb-brand">
+    <div class="sb-logo">✓</div>
+    <div>
+      <div class="sb-title">COMP5 Verifier</div>
+      <div class="sb-sub">QatarEnergy LNG</div>
+    </div>
   </div>
-  <span class="badge">Web v2.0</span>
-</header>
+  <nav class="sb-nav">
+    <div class="sb-section">Main</div>
+    <a class="sb-item active" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </a>
+    <a class="sb-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      Verification
+    </a>
+    <a class="sb-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Downloads
+    </a>
+    <div class="sb-section">Reports</div>
+    <a class="sb-item" href="/reports">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      TQ / SDR
+      <span class="sb-badge">3</span>
+    </a>
+    <a class="sb-item" href="/reports">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      Weekly Report
+    </a>
+    <a class="sb-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Analytics
+    </a>
+    <div class="sb-section">System</div>
+    <a class="sb-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="12 8 12 12 14 14"/><path d="M3.05 11a9 9 0 1 0 .5-4.5"/><polyline points="3 2 3 7 8 7"/></svg>
+      Batch History
+    </a>
+    <a class="sb-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      DC Team
+    </a>
+    <a class="sb-item" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+      Settings
+    </a>
+  </nav>
+  <div class="sb-user">
+    <div class="sb-avatar">SK</div>
+    <div>
+      <div class="sb-uname">Sajjad Khalid</div>
+      <div class="sb-urole">Lead Document Controller</div>
+    </div>
+  </div>
+</div>
 
-<main>
+<!-- MAIN -->
+<div class="main-wrap">
 
-  <!-- Upload Card -->
-  <div class="card" id="upload-card">
-    <h2>Upload Files</h2>
-    <div class="upload-grid">
-      <div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">ZIP File (drawings)</div>
-        <div class="drop-area" id="zip-drop" onclick="document.getElementById('zip-input').click()">
-          <div class="icon">🗜️</div>
-          <div class="filename" id="zip-name">Click or drag ZIP here</div>
-          <p style="color:#f85149;font-weight:600;margin-top:6px;">
-            ⚠️ Maximum 50 drawings per batch.<br>
-            The Excel transmittal must list the same drawings only (max 50 rows).
-          </p>
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="tb-left">
+      <span class="tb-page">Drawing Verification Dashboard</span>
+    </div>
+    <div class="tb-right">
+      <div class="live-badge"><div class="live-dot"></div>Live</div>
+      <span class="tb-date" id="tb-date"></span>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="qa-bar">
+    <button class="qa-btn primary" onclick="document.getElementById('zip-input').click()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+      Upload ZIP
+    </button>
+    <button class="qa-btn primary" onclick="document.getElementById('xlsx-input').click()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+      Upload Excel
+    </button>
+    <div class="qa-sep"></div>
+    <button class="qa-btn" id="qa-run-btn" onclick="startVerification()" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Run Verification
+    </button>
+    <button class="qa-btn" onclick="downloadReport()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download Report
+    </button>
+    <button class="qa-btn" onclick="resetForm()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+      New Batch
+    </button>
+  </div>
+
+  <!-- Scrollable content -->
+  <div class="content">
+
+    <!-- Upload section -->
+    <div id="upload-section">
+      <div class="upload-grid">
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:7px;">ZIP File (drawings)</div>
+          <div class="drop-area" id="zip-drop" onclick="document.getElementById('zip-input').click()">
+            <div class="drop-top">
+              <div class="drop-ico">🗜️</div>
+              <div>
+                <div class="drop-name" id="zip-name">Click or drag ZIP here</div>
+                <div class="drop-sub" id="zip-sub">Supports flat ZIP, ZIP-in-ZIP (ST drawings)</div>
+              </div>
+            </div>
+            <div id="zip-chip" style="display:none"><span class="drop-chip">✓ Ready to verify</span></div>
+            <div class="drop-hint" style="color:#dc2626;font-weight:500;">⚠ Maximum 50 drawings per batch. The Excel transmittal must list the same drawings only (max 50 rows).</div>
+          </div>
+          <input type="file" id="zip-input" accept=".zip" hidden>
         </div>
-        <input type="file" id="zip-input" accept=".zip" hidden>
-      </div>
-      <div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Excel Transmittal (QG-NFPS sheet)</div>
-        <div class="drop-area" id="xlsx-drop" onclick="document.getElementById('xlsx-input').click()">
-          <div class="icon">📊</div>
-          <div class="filename" id="xlsx-name">Click or drag Excel here</div>
-          <p>Sheet: QG-NFPS, data from row 25</p>
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:7px;">Excel Transmittal (QG-NFPS sheet)</div>
+          <div class="drop-area" id="xlsx-drop" onclick="document.getElementById('xlsx-input').click()">
+            <div class="drop-top">
+              <div class="drop-ico">📊</div>
+              <div>
+                <div class="drop-name" id="xlsx-name">Click or drag Excel here</div>
+                <div class="drop-sub">Sheet: QG-NFPS, data from row 25</div>
+              </div>
+            </div>
+            <div id="xlsx-chip" style="display:none"><span class="drop-chip">✓ Ready to verify</span></div>
+          </div>
+          <input type="file" id="xlsx-input" accept=".xlsx,.xls" hidden>
         </div>
-        <input type="file" id="xlsx-input" accept=".xlsx,.xls" hidden>
+      </div>
+      <div style="margin-top:12px;">
+        <div class="warn-bar" style="margin-bottom:10px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Maximum 50 drawings per batch — split larger batches into multiple ZIPs
+        </div>
+        <button class="run-btn" id="run-btn" disabled onclick="startVerification()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run Verification
+        </button>
       </div>
     </div>
-    <div style="margin-top:16px;">
-      <button id="run-btn" disabled onclick="startVerification()">▶ Run Verification</button>
-    </div>
-  </div>
 
-  <!-- Progress Card -->
-  <div class="card" id="progress-section">
-    <h2>Verifying…</h2>
-    <div class="progress-bar-wrap"><div class="progress-bar" id="prog-bar"></div></div>
-    <div class="progress-label" id="prog-label">Starting…</div>
-    <div id="log-box" style="margin-top:12px;"></div>
-  </div>
-
-  <!-- Summary -->
-  <div class="card" id="summary-section">
-    <h2>Summary</h2>
-    <div class="summary-grid">
-      <div class="summary-card"><div class="val val-white" id="s-total">0</div><div class="lbl">Total</div></div>
-      <div class="summary-card"><div class="val val-green" id="s-pass">0</div><div class="lbl">Passed</div></div>
-      <div class="summary-card"><div class="val val-red"   id="s-fail">0</div><div class="lbl">Failed</div></div>
-      <div class="summary-card"><div class="val val-amber" id="s-warn">0</div><div class="lbl">Warnings</div></div>
+    <!-- Progress -->
+    <div id="progress-section">
+      <div class="progress-card">
+        <h3>Verifying drawings…</h3>
+        <div class="prog-bar-wrap"><div class="prog-bar" id="prog-bar"></div></div>
+        <div class="prog-label" id="prog-label">Starting…</div>
+        <div class="log-box" id="log-box"></div>
+      </div>
     </div>
-    <div class="actions">
-      <button onclick="downloadReport()">📥 Download Excel Report</button>
-      <button class="btn-secondary" onclick="resetForm()">🔄 New Batch</button>
-    </div>
-  </div>
 
-  <!-- Results Table -->
-  <div class="card" id="results-section">
-    <h2>Results</h2>
-    <div class="table-wrap">
-      <table id="results-table">
-        <thead>
-          <tr>
-            <th style="width:32px">#</th>
-            <th style="min-width:140px;max-width:180px">Filename</th>
-            <th style="width:62px">Doc No</th>
-            <th style="width:52px">CPY</th>
-            <th style="width:42px">Rev</th>
-            <th style="width:68px">Sigs</th>
-            <th style="width:48px">Cmts</th>
-            <th style="width:52px">Class.</th>
-            <th style="width:62px">Proj No</th>
-            <th style="width:52px">SHT No</th>
-            <th style="width:62px">Prev Rev</th>
-            <th style="width:48px">Title</th>
-            <th style="width:62px">RESULT</th>
-            <th style="min-width:120px">Issues</th>
-          </tr>
-        </thead>
-        <tbody id="results-body"></tbody>
-      </table>
+    <!-- Summary stats -->
+    <div id="summary-section">
+      <div class="stats-grid">
+        <div class="stat-card total">
+          <div class="stat-ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+          <div><div class="stat-n" id="s-total">0</div><div class="stat-l">Total Drawings</div></div>
+        </div>
+        <div class="stat-card passed">
+          <div class="stat-ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </div>
+          <div><div class="stat-n" id="s-pass">0</div><div class="stat-l">Passed</div></div>
+        </div>
+        <div class="stat-card failed">
+          <div class="stat-ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          </div>
+          <div><div class="stat-n" id="s-fail">0</div><div class="stat-l">Failed</div></div>
+        </div>
+        <div class="stat-card warned">
+          <div class="stat-ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+          <div><div class="stat-n" id="s-warn">0</div><div class="stat-l">Warnings</div></div>
+        </div>
+      </div>
+      <div class="bottom-actions" style="margin-top:12px;">
+        <button class="btn-dl" onclick="downloadReport()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download Excel Report
+        </button>
+        <button class="btn-secondary" onclick="resetForm()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>
+          New Batch
+        </button>
+      </div>
     </div>
-  </div>
 
-</main>
+    <!-- Results table -->
+    <div id="results-section">
+      <div class="results-head" style="margin-bottom:10px;">
+        <div class="results-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Verification Results
+        </div>
+      </div>
+      <div class="table-wrap">
+        <!-- Group header -->
+        <div class="group-header-row">
+          <div class="gh first" style="grid-column:span 2">Drawing</div>
+          <div class="gh checks">10 Quality Checks</div>
+          <div class="gh result">Result</div>
+          <div class="gh">Issues</div>
+        </div>
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th class="th-sr">#</th>
+              <th class="th-fn">Filename</th>
+              <th>Doc</th>
+              <th>CPY</th>
+              <th>Rev</th>
+              <th>Sigs</th>
+              <th>Cmts</th>
+              <th>Class</th>
+              <th>Proj</th>
+              <th>SHT</th>
+              <th>Prev</th>
+              <th>Title</th>
+              <th class="th-res">Result</th>
+              <th class="th-iss">Issues</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- end content -->
+</div><!-- end main-wrap -->
 
 <script>
+// Set date
+document.getElementById('tb-date').textContent = new Date().toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'});
+
 let zipFile = null, xlsxFile = null, currentJobId = null, pollTimer = null, keepaliveTimer = null, lastLogCount = 0;
 
 // File inputs
@@ -186,14 +683,27 @@ document.getElementById('xlsx-input').onchange = e => setFile('xlsx', e.target.f
 
 function setFile(type, file) {
   if (!file) return;
-  if (type === 'zip')  { zipFile  = file; document.getElementById('zip-name').textContent  = file.name; document.getElementById('zip-drop').classList.add('has-file'); }
-  if (type === 'xlsx') { xlsxFile = file; document.getElementById('xlsx-name').textContent = file.name; document.getElementById('xlsx-drop').classList.add('has-file'); }
-  document.getElementById('run-btn').disabled = !(zipFile && xlsxFile);
+  if (type === 'zip') {
+    zipFile = file;
+    document.getElementById('zip-name').textContent = file.name;
+    document.getElementById('zip-sub').textContent  = (file.size/1024/1024).toFixed(1) + ' MB';
+    document.getElementById('zip-drop').classList.add('has-file');
+    document.getElementById('zip-chip').style.display = 'block';
+  }
+  if (type === 'xlsx') {
+    xlsxFile = file;
+    document.getElementById('xlsx-name').textContent = file.name;
+    document.getElementById('xlsx-drop').classList.add('has-file');
+    document.getElementById('xlsx-chip').style.display = 'block';
+  }
+  const ready = !!(zipFile && xlsxFile);
+  document.getElementById('run-btn').disabled    = !ready;
+  document.getElementById('qa-run-btn').disabled = !ready;
 }
 
 // Drag and drop
 ['zip-drop','xlsx-drop'].forEach(id => {
-  const el = document.getElementById(id);
+  const el   = document.getElementById(id);
   const type = id.replace('-drop','');
   el.ondragover  = e => { e.preventDefault(); el.classList.add('drag-over'); };
   el.ondragleave = ()  => el.classList.remove('drag-over');
@@ -202,8 +712,6 @@ function setFile(type, file) {
 
 async function startVerification() {
   if (!zipFile || !xlsxFile) return;
-
-  // Check ZIP file count before uploading
   if (zipFile.size > 80 * 1024 * 1024) {
     if (!confirm(
       '⚠️ Warning: Your ZIP file is larger than 80MB.\n\n' +
@@ -212,7 +720,8 @@ async function startVerification() {
       'Are you sure you want to continue?'
     )) return;
   }
-  document.getElementById('run-btn').disabled = true;
+  document.getElementById('run-btn').disabled    = true;
+  document.getElementById('qa-run-btn').disabled = true;
   document.getElementById('progress-section').style.display = 'block';
   document.getElementById('summary-section').style.display  = 'none';
   document.getElementById('results-section').style.display  = 'none';
@@ -228,11 +737,10 @@ async function startVerification() {
   try {
     resp = await fetch('/api/verify', { method:'POST', body: fd });
     const text = await resp.text();
-    try {
-      data = JSON.parse(text);
-    } catch(e) {
-      // Server returned HTML error page — show friendly message
-      document.getElementById('run-btn').disabled = false;
+    try { data = JSON.parse(text); }
+    catch(e) {
+      document.getElementById('run-btn').disabled    = false;
+      document.getElementById('qa-run-btn').disabled = false;
       document.getElementById('progress-section').style.display = 'none';
       const errMsg = resp.status === 413
         ? 'File too large! ZIP file exceeds 150MB limit.\nPlease split into smaller batches.'
@@ -242,37 +750,34 @@ async function startVerification() {
       alert(errMsg);
       return;
     }
-    if (!resp.ok) { 
-      document.getElementById('run-btn').disabled = false;
+    if (!resp.ok) {
+      document.getElementById('run-btn').disabled    = false;
+      document.getElementById('qa-run-btn').disabled = false;
       document.getElementById('progress-section').style.display = 'none';
-      alert('Error: ' + (data.error || 'Unknown error')); 
-      return; 
+      alert('Error: ' + (data.error || 'Unknown error'));
+      return;
     }
   } catch(networkErr) {
-    document.getElementById('run-btn').disabled = false;
+    document.getElementById('run-btn').disabled    = false;
+    document.getElementById('qa-run-btn').disabled = false;
     document.getElementById('progress-section').style.display = 'none';
-    alert('Network error: Cannot reach server.\nThe server may be waking up (free tier) — wait 30 seconds and try again.');
+    alert('Network error: Cannot reach server.\nThe server may be waking up — wait 30 seconds and try again.');
     return;
   }
   currentJobId = data.job_id;
   pollTimer = setInterval(poll, 1200);
-  // Keepalive — ping server every 10s to prevent free-tier sleep during long jobs
-  keepaliveTimer = setInterval(async () => {
-    try { await fetch('/ping'); } catch(e) {}
-  }, 10000);
+  keepaliveTimer = setInterval(async () => { try { await fetch('/ping'); } catch(e) {} }, 10000);
 }
 
 async function poll() {
   if (!currentJobId) return;
   const resp = await fetch('/api/job/' + currentJobId);
   if (resp.status === 404) {
-    clearInterval(pollTimer);
-    clearInterval(keepaliveTimer);
-    // Server restarted — show how many results were saved
-    const done = document.getElementById('results-body').children.length;
-    const total = parseInt(document.getElementById('prog-label').textContent.split('/')[1]||'?');
+    clearInterval(pollTimer); clearInterval(keepaliveTimer);
+    const done  = document.getElementById('results-body').children.length;
     document.getElementById('progress-section').style.display = 'none';
-    document.getElementById('run-btn').disabled = false;
+    document.getElementById('run-btn').disabled    = false;
+    document.getElementById('qa-run-btn').disabled = false;
     alert(
       'Server restarted during verification.\n\n' +
       `✅ ${done} drawings were completed and saved.\n` +
@@ -281,10 +786,10 @@ async function poll() {
     );
     return;
   }
-  const job  = await resp.json();
+  const job = await resp.json();
 
   // Update log
-  const logBox = document.getElementById('log-box');
+  const logBox   = document.getElementById('log-box');
   const newLines = (job.log || []).slice(lastLogCount);
   newLines.forEach(line => {
     const div = document.createElement('div');
@@ -295,14 +800,14 @@ async function poll() {
   if (newLines.length) logBox.scrollTop = logBox.scrollHeight;
   lastLogCount = (job.log || []).length;
 
-  // Progress bar
+  // Progress
   const total = job.total || 1;
   const done  = job.progress || 0;
-  document.getElementById('prog-bar').style.width  = (done/total*100) + '%';
-  document.getElementById('prog-label').textContent = `${done} / ${total}`;
+  document.getElementById('prog-bar').style.width   = (done/total*100) + '%';
+  document.getElementById('prog-label').textContent  = `${done} / ${total}`;
 
   // Incremental rows
-  const tbody = document.getElementById('results-body');
+  const tbody   = document.getElementById('results-body');
   const current = tbody.children.length;
   (job.results || []).slice(current).forEach(r => {
     tbody.appendChild(makeRow(r));
@@ -310,28 +815,23 @@ async function poll() {
   });
 
   if (job.status === 'done') {
-    clearInterval(pollTimer);
-    clearInterval(keepaliveTimer);
-    currentJobId = currentJobId;  // keep job id so download works
+    clearInterval(pollTimer); clearInterval(keepaliveTimer);
     const s = job.summary || {};
-    document.getElementById('s-total').textContent = s.total || (job.results||[]).length || 0;
+    document.getElementById('s-total').textContent = s.total  || (job.results||[]).length || 0;
     document.getElementById('s-pass').textContent  = s.passed || 0;
     document.getElementById('s-fail').textContent  = s.failed || 0;
     document.getElementById('s-warn').textContent  = s.warned || 0;
-    document.getElementById('summary-section').style.display = 'block';
+    document.getElementById('summary-section').style.display  = 'block';
     document.getElementById('progress-section').style.display = 'none';
   } else if (job.status === 'error') {
     clearInterval(pollTimer);
     alert('Verification error: ' + (job.error || 'Unknown error'));
   }
-  // Handle 404 job not found
   if (job.error && job.error.includes('not found')) {
     clearInterval(pollTimer);
     document.getElementById('progress-section').style.display = 'none';
-    alert('⚠️ Server restarted and lost the job.\n\nPlease click "New Batch" and run the verification again.\n\n(This happens on the free Render plan when the server sleeps between requests.)');
-  } else if (job.status === 'running' && (job.results||[]).length > 0 && 
-             (job.results||[]).length === (job.total||0)) {
-    // All results received but status not yet "done" — show summary anyway
+    alert('⚠️ Server restarted and lost the job.\n\nPlease click "New Batch" and run again.');
+  } else if (job.status === 'running' && (job.results||[]).length > 0 && (job.results||[]).length === (job.total||0)) {
     const s = {
       total:  (job.results||[]).length,
       passed: (job.results||[]).filter(r=>r.overallResult==="PASS").length,
@@ -342,92 +842,143 @@ async function poll() {
     document.getElementById('s-pass').textContent  = s.passed;
     document.getElementById('s-fail').textContent  = s.failed;
     document.getElementById('s-warn').textContent  = s.warned;
-    document.getElementById('summary-section').style.display = 'block';
+    document.getElementById('summary-section').style.display  = 'block';
     document.getElementById('progress-section').style.display = 'none';
   }
 }
 
 function pill(val) {
-  const cls = val==='PASS' ? 'pass' : val==='FAIL' ? 'fail' : 'warn';
-  return `<span class="pill pill-${cls}">${val}</span>`;
+  if (!val || val === '?') return '<span class="pill pill-warn">?</span>';
+  const cls  = val==='PASS' ? 'pass' : val==='FAIL' ? 'fail' : 'warn';
+  const icon = val==='PASS'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+    : val==='FAIL'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+  return `<span class="pill pill-${cls}">${icon}${val}</span>`;
+}
+
+function resBadge(ov) {
+  const cls  = ov==='PASS' ? 'res-pass' : ov==='FAIL' ? 'res-fail' : 'res-warn';
+  const icon = ov==='PASS'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+    : ov==='FAIL'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+  return `<span class="res-badge ${cls}">${icon}${ov}</span>`;
+}
+
+function sigsDots(count, status) {
+  const c = Math.min(count || 0, 3);
+  let dots = '';
+  for (let i=0; i<3; i++) {
+    dots += `<div class="sig-dot${i < c ? '' : ' off'}"></div>`;
+  }
+  return `<div class="sigs-dots">${dots}</div>`;
+}
+
+function issueHtml(issues) {
+  if (!issues || issues === 'None') return '<span class="iss-none">—</span>';
+  const parts = issues.split(';').map(p => p.trim()).filter(Boolean);
+  return parts.map(p => {
+    let tag = '';
+    if (p.includes('Doc No'))        tag = '<span class="iss-tag fail">Doc</span>';
+    else if (p.includes('CPY'))      tag = '<span class="iss-tag fail">CPY</span>';
+    else if (p.includes('Rev '))     tag = '<span class="iss-tag fail">Rev</span>';
+    else if (p.includes('signature'))tag = '<span class="iss-tag fail">Sigs</span>';
+    else if (p.includes('comment'))  tag = '<span class="iss-tag fail">Cmts</span>';
+    else if (p.includes('SHT'))      tag = '<span class="iss-tag fail">SHT</span>';
+    else if (p.includes('project no'))tag= '<span class="iss-tag fail">Proj</span>';
+    else if (p.includes('Title'))    tag = '<span class="iss-tag fail">Title</span>';
+    else if (p.includes('Classification') && p.includes('missing')) tag = '<span class="iss-tag fail">Class</span>';
+    else if (p.includes('Classification') || p.includes('not found')) tag = '<span class="iss-tag warn">Class</span>';
+    else if (p.includes('Prev rev')) tag = '<span class="iss-tag warn">Prev</span>';
+    return tag + p.replace(/^(Doc No|CPY No|Rev|SHT|Title|Prev rev|Classification).*?—\s*/i,'');
+  }).join('<br>');
 }
 
 function makeRow(r) {
-  const tr = document.createElement('tr');
-  const ov = r.overallResult || '?';
-  const fname = r.filename || '';
+  const tr     = document.createElement('tr');
+  const ov     = r.overallResult || '?';
+  const fname  = r.filename || '';
   const issues = r.issues || 'None';
+  const fnShort = fname.replace(/\.pdf$/i,'');
+
   tr.innerHTML = `
-    <td style="text-align:center;padding:6px 4px;">${r.srNo || ''}</td>
-    <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 6px;" title="${fname}">${fname}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.docNoMatch||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.cpyNoMatch||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.revMatch||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.sigsResult||'?')}<br><span style="color:var(--muted);font-size:9px;">${r.sigCount||0}/3</span></td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.commentsResult||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.classificationResult||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.projNoResult||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.shtNoResult||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.prevRevResult||'?')}</td>
-    <td style="text-align:center;padding:6px 2px;">${pill(r.titleMatch||'?')}</td>
-    <td style="text-align:center;padding:6px 4px;font-weight:700;">${pill(ov)}</td>
-    <td style="color:${(issues&&issues!='None')?'#f85149':'var(--muted)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;padding:6px 4px;" title="${issues}">${issues}</td>
+    <td class="td-sr">${r.srNo || ''}</td>
+    <td class="td-fn">
+      <div class="fn-wrap">
+        <div class="fn-ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+        <div>
+          <div class="fn-text" title="${fname}">${fnShort}</div>
+          <div class="fn-sheets">${r.docNo || ''}</div>
+        </div>
+      </div>
+    </td>
+    <td>${pill(r.docNoMatch||'?')}</td>
+    <td>${pill(r.cpyNoMatch||'?')}</td>
+    <td>${pill(r.revMatch||'?')}</td>
+    <td>${sigsDots(r.sigCount, r.sigsResult)}</td>
+    <td>${pill(r.commentsResult||'?')}</td>
+    <td>${pill(r.classificationResult||'?')}</td>
+    <td>${pill(r.projNoResult||'?')}</td>
+    <td>${pill(r.shtNoResult||'?')}</td>
+    <td>${pill(r.prevRevResult||'?')}</td>
+    <td>${pill(r.titleMatch||'?')}</td>
+    <td>${resBadge(ov)}</td>
+    <td class="td-iss">${issueHtml(issues)}</td>
   `;
   return tr;
 }
 
 async function downloadReport() {
   if (!currentJobId) return;
-  const btn = document.querySelector('[onclick="downloadReport()"]');
-  const origText = btn ? btn.textContent : '';
+  const btns = document.querySelectorAll('[onclick="downloadReport()"]');
+  btns.forEach(b => { b.textContent = '⏳ Preparing...'; b.disabled = true; });
   try {
-    if (btn) { btn.textContent = '⏳ Preparing...'; btn.disabled = true; }
-
-    // Fetch the file as a blob — proper download without page navigation
     const resp = await fetch('/api/job/' + currentJobId + '/download');
-
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({error: 'Download failed'}));
-      alert('Download error: ' + (err.error || resp.status));
-      return;
-    }
-
-    // Get filename from Content-Disposition header or use default
+    if (!resp.ok) { const err = await resp.json().catch(()=>({error:'Download failed'})); alert('Download error: ' + (err.error||resp.status)); return; }
     const disposition = resp.headers.get('Content-Disposition') || '';
-    const match = disposition.match(/filename[^;=\n]*=(['"]?)([^\n]*?)\1/);
-    const filename = match ? match[2] : 'Verification_Report.xlsx';
-
-    // Create blob and trigger browser download
+    const match       = disposition.match(/filename[^;=\n]*=(['"]?)([^\n]*?)\1/);
+    const filename    = match ? match[2] : 'Verification_Report.xlsx';
     const blob = await resp.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    a.href     = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
-
   } catch(e) {
     alert('Download failed: ' + e.message);
   } finally {
-    if (btn) { btn.textContent = origText; btn.disabled = false; }
+    btns.forEach(b => { b.textContent = b.classList.contains('btn-dl') ? '⬇ Download Excel Report' : '⬇ Download Report'; b.disabled = false; });
   }
 }
 
 function resetForm() {
   zipFile = xlsxFile = null; currentJobId = null; lastLogCount = 0;
-  if (pollTimer) clearInterval(pollTimer);
+  if (pollTimer)     clearInterval(pollTimer);
   if (keepaliveTimer) clearInterval(keepaliveTimer);
-  ['zip-drop','xlsx-drop'].forEach(id => document.getElementById(id).classList.remove('has-file'));
+  ['zip-drop','xlsx-drop'].forEach(id => document.getElementById(id).classList.remove('has-file','drag-over'));
   document.getElementById('zip-name').textContent  = 'Click or drag ZIP here';
+  document.getElementById('zip-sub').textContent   = 'Supports flat ZIP, ZIP-in-ZIP (ST drawings)';
   document.getElementById('xlsx-name').textContent = 'Click or drag Excel here';
-  document.getElementById('run-btn').disabled = true;
+  document.getElementById('zip-chip').style.display  = 'none';
+  document.getElementById('xlsx-chip').style.display = 'none';
+  document.getElementById('run-btn').disabled    = true;
+  document.getElementById('qa-run-btn').disabled = true;
   document.getElementById('progress-section').style.display = 'none';
   document.getElementById('summary-section').style.display  = 'none';
   document.getElementById('results-section').style.display  = 'none';
   document.getElementById('results-body').innerHTML = '';
+  document.getElementById('log-box').innerHTML      = '';
+  document.getElementById('prog-bar').style.width   = '0%';
+  document.getElementById('prog-label').textContent = 'Starting…';
 }
+
+// Ping keepalive
+setInterval(async () => { try { await fetch('/ping'); } catch(e) {} }, 10000);
 </script>
 </body>
 </html>
