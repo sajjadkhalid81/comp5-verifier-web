@@ -406,7 +406,35 @@ tr:hover td { background: var(--gray-50); }
 .iss-tag.warn { background: var(--amber-muted-bg); color: #92400e; }
 .iss-none { color: #d1d5db !important; }
 
-/* Action buttons bottom */
+/* ── CHARTS ── */
+.charts-grid { display: grid; grid-template-columns: 220px 1fr; gap: 12px; margin-top: 12px; }
+.chart-card {
+  background: var(--surface); border: .5px solid var(--border);
+  border-radius: var(--radius-lg); padding: 14px 16px;
+}
+.chart-title { font-size: 11px; font-weight: 600; color: var(--text); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+.chart-title span { font-size: 9px; color: var(--text-light); font-weight: 400; }
+
+/* Donut */
+.donut-wrap { display: flex; align-items: center; gap: 14px; }
+.donut-svg { flex-shrink: 0; }
+.donut-legend { display: flex; flex-direction: column; gap: 7px; }
+.leg { display: flex; align-items: center; gap: 7px; font-size: 10px; color: var(--text-muted); }
+.leg-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.leg-val { margin-left: auto; font-weight: 600; color: var(--text); font-size: 11px; }
+.leg-pct { color: var(--text-light); font-size: 9px; }
+
+/* Bar chart */
+.bar-list { display: flex; flex-direction: column; gap: 8px; }
+.bar-row { display: flex; align-items: center; gap: 8px; }
+.bar-label { font-size: 10px; color: var(--text-muted); width: 72px; flex-shrink: 0; text-align: right; }
+.bar-track { flex: 1; background: var(--gray-100); border-radius: 99px; height: 8px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 99px; transition: width .6s ease; }
+.bar-fill.high { background: var(--green); }
+.bar-fill.mid  { background: var(--amber-muted); }
+.bar-fill.low  { background: var(--red); }
+.bar-pct { font-size: 10px; font-weight: 600; color: var(--text); width: 34px; text-align: right; flex-shrink: 0; }
+
 .bottom-actions { display: flex; gap: 10px; }
 .btn-dl {
   display: inline-flex; align-items: center; gap: 6px;
@@ -616,6 +644,44 @@ tr:hover td { background: var(--gray-50); }
           <div><div class="stat-n" id="s-warn">0</div><div class="stat-l">Warnings</div></div>
         </div>
       </div>
+
+      <!-- Charts row -->
+      <div class="charts-grid" id="charts-section" style="display:none">
+        <!-- Donut chart -->
+        <div class="chart-card">
+          <div class="chart-title">Overall Status <span id="batch-label"></span></div>
+          <div class="donut-wrap">
+            <svg class="donut-svg" width="90" height="90" viewBox="0 0 90 90" id="donut-svg">
+              <circle cx="45" cy="45" r="35" fill="none" stroke="#f3f4f6" stroke-width="14"/>
+              <circle cx="45" cy="45" r="35" fill="none" stroke="#16a34a" stroke-width="14"
+                id="donut-pass" stroke-dasharray="0 220" stroke-dashoffset="0"
+                transform="rotate(-90 45 45)" stroke-linecap="butt"/>
+              <circle cx="45" cy="45" r="35" fill="none" stroke="#dc2626" stroke-width="14"
+                id="donut-fail" stroke-dasharray="0 220" stroke-dashoffset="0"
+                transform="rotate(-90 45 45)" stroke-linecap="butt"/>
+              <circle cx="45" cy="45" r="35" fill="none" stroke="#d97706" stroke-width="14"
+                id="donut-warn" stroke-dasharray="0 220" stroke-dashoffset="0"
+                transform="rotate(-90 45 45)" stroke-linecap="butt"/>
+              <text x="45" y="41" text-anchor="middle" font-size="16" font-weight="700" fill="#111827" id="donut-total">0</text>
+              <text x="45" y="53" text-anchor="middle" font-size="9" fill="#9ca3af">Total</text>
+            </svg>
+            <div class="donut-legend">
+              <div class="leg"><div class="leg-dot" style="background:#16a34a"></div>Pass<span class="leg-pct" id="leg-pass-pct"></span><span class="leg-val" id="leg-pass">0</span></div>
+              <div class="leg"><div class="leg-dot" style="background:#dc2626"></div>Fail<span class="leg-pct" id="leg-fail-pct"></span><span class="leg-val" id="leg-fail">0</span></div>
+              <div class="leg"><div class="leg-dot" style="background:#d97706"></div>Warn<span class="leg-pct" id="leg-warn-pct"></span><span class="leg-val" id="leg-warn">0</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bar chart -->
+        <div class="chart-card">
+          <div class="chart-title">Check Pass Rate <span>per quality check</span></div>
+          <div class="bar-list" id="bar-list">
+            <!-- populated by JS -->
+          </div>
+        </div>
+      </div>
+
       <div class="bottom-actions" style="margin-top:12px;">
         <button class="btn-dl" onclick="downloadReport()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -823,6 +889,7 @@ async function poll() {
     document.getElementById('s-warn').textContent  = s.warned || 0;
     document.getElementById('summary-section').style.display  = 'block';
     document.getElementById('progress-section').style.display = 'none';
+    updateCharts(job.results || []);
   } else if (job.status === 'error') {
     clearInterval(pollTimer);
     alert('Verification error: ' + (job.error || 'Unknown error'));
@@ -844,6 +911,7 @@ async function poll() {
     document.getElementById('s-warn').textContent  = s.warned;
     document.getElementById('summary-section').style.display  = 'block';
     document.getElementById('progress-section').style.display = 'none';
+    updateCharts(job.results || []);
   }
 }
 
@@ -933,7 +1001,69 @@ function makeRow(r) {
   return tr;
 }
 
-async function downloadReport() {
+function updateCharts(results) {
+  if (!results || results.length === 0) return;
+  const total  = results.length;
+  const passed = results.filter(r => r.overallResult === 'PASS').length;
+  const failed = results.filter(r => r.overallResult === 'FAIL').length;
+  const warned = results.filter(r => r.overallResult === 'WARN').length;
+  const circ   = 2 * Math.PI * 35; // circumference
+
+  // Donut
+  document.getElementById('donut-total').textContent = total;
+  document.getElementById('leg-pass').textContent = passed;
+  document.getElementById('leg-fail').textContent = failed;
+  document.getElementById('leg-warn').textContent = warned;
+  document.getElementById('leg-pass-pct').textContent = ' ' + Math.round(passed/total*100) + '%';
+  document.getElementById('leg-fail-pct').textContent = ' ' + Math.round(failed/total*100) + '%';
+  document.getElementById('leg-warn-pct').textContent = ' ' + Math.round(warned/total*100) + '%';
+
+  const passArc = (passed/total) * circ;
+  const failArc = (failed/total) * circ;
+  const warnArc = (warned/total) * circ;
+  const passEl = document.getElementById('donut-pass');
+  const failEl = document.getElementById('donut-fail');
+  const warnEl = document.getElementById('donut-warn');
+  passEl.setAttribute('stroke-dasharray', passArc + ' ' + (circ - passArc));
+  passEl.setAttribute('stroke-dashoffset', '0');
+  failEl.setAttribute('stroke-dasharray', failArc + ' ' + (circ - failArc));
+  failEl.setAttribute('stroke-dashoffset', -passArc);
+  warnEl.setAttribute('stroke-dasharray', warnArc + ' ' + (circ - warnArc));
+  warnEl.setAttribute('stroke-dashoffset', -(passArc + failArc));
+
+  // Per-check bar chart
+  const checks = [
+    { key: 'docNoMatch',            label: 'Doc No' },
+    { key: 'cpyNoMatch',            label: 'CPY No' },
+    { key: 'revMatch',              label: 'Revision' },
+    { key: 'sigsResult',            label: 'Signatures' },
+    { key: 'commentsResult',        label: 'Comments' },
+    { key: 'classificationResult',  label: 'Class.' },
+    { key: 'projNoResult',          label: 'Project No' },
+    { key: 'shtNoResult',           label: 'SHT No' },
+    { key: 'prevRevResult',         label: 'Prev Rev' },
+    { key: 'titleMatch',            label: 'Title' },
+  ];
+  const barList = document.getElementById('bar-list');
+  barList.innerHTML = '';
+  checks.forEach(c => {
+    const valid = results.filter(r => r[c.key] && r[c.key] !== '?');
+    if (valid.length === 0) return;
+    const pct = Math.round(valid.filter(r => r[c.key] === 'PASS').length / valid.length * 100);
+    const cls = pct >= 90 ? 'high' : pct >= 70 ? 'mid' : 'low';
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <div class="bar-label">${c.label}</div>
+      <div class="bar-track"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
+      <div class="bar-pct" style="color:${pct>=90?'#16a34a':pct>=70?'#d97706':'#dc2626'}">${pct}%</div>
+    `;
+    barList.appendChild(row);
+  });
+
+  document.getElementById('charts-section').style.display = 'grid';
+}
+
   if (!currentJobId) return;
   const btns = document.querySelectorAll('[onclick="downloadReport()"]');
   btns.forEach(b => { b.textContent = '⏳ Preparing...'; b.disabled = true; });
@@ -971,6 +1101,8 @@ function resetForm() {
   document.getElementById('progress-section').style.display = 'none';
   document.getElementById('summary-section').style.display  = 'none';
   document.getElementById('results-section').style.display  = 'none';
+  document.getElementById('charts-section').style.display   = 'none';
+  document.getElementById('bar-list').innerHTML              = '';
   document.getElementById('results-body').innerHTML = '';
   document.getElementById('log-box').innerHTML      = '';
   document.getElementById('prog-bar').style.width   = '0%';
