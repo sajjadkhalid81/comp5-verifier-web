@@ -256,9 +256,63 @@ def _check_project_no(doc):
     return "PASS", ""
 
 
+def _check_sheet_numbers(doc):
+    """
+    Check SHT number on every page — label-driven.
+
+    GOLDEN RULE: Find SHT label, read value below it.
+
+    Rule: SHT value on page N must equal N formatted as 4 digits.
+      Page 1 → 0001, Page 2 → 0002, Page 3 → 0003 etc.
+
+    Returns:
+      PASS  — all SHT numbers correct
+      FAIL  — one or more pages have wrong or missing SHT number
+    """
+    wrong_pages   = []
+    missing_pages = []
+
+    for i, page in enumerate(doc):
+        expected_sht = f"{i+1:04d}"
+        words = page.get_text("words")
+
+        # Find SHT label
+        sht_val = None
+        for j, w in enumerate(words):
+            if w[4].upper().replace(".", "").strip() != "SHT":
+                continue
+            lx0, ly0, lx1, ly1 = w[:4]
+            # Read value directly BELOW SHT label (within 35pts, same x zone)
+            candidates = []
+            for w2 in words:
+                if (w2[1] >= ly1 and w2[1] <= ly1 + 35
+                        and abs(w2[0] - lx0) < 30
+                        and re.match(r"^\d{4}$", w2[4].strip())):
+                    candidates.append((w2[1], w2[4].strip()))
+            if candidates:
+                candidates.sort()
+                sht_val = candidates[0][1]
+            break
+
+        if not sht_val:
+            missing_pages.append(i + 1)
+        elif sht_val != expected_sht:
+            wrong_pages.append((i + 1, sht_val, expected_sht))
+
+    if wrong_pages or missing_pages:
+        parts = []
+        for pg, found, exp in wrong_pages:
+            parts.append(f"Page {pg}: SHT={found} (expected {exp})")
+        for pg in missing_pages:
+            parts.append(f"Page {pg}: SHT not found")
+        return "FAIL", "; ".join(parts)
+
+    return "PASS", ""
+
+
 def verify_pdf(pdf_bytes, filename, row):
     """
-    Full 8-check verification of a single PDF.
+    Full 9-check verification of a single PDF.
     Returns result dict compatible with web and desktop versions.
     """
     if not PYMUPDF_OK:
@@ -304,6 +358,9 @@ def verify_pdf(pdf_bytes, filename, row):
         # 9 ── Project No — checked on ALL sheets
         proj_status, proj_detail = _check_project_no(doc)
 
+        # 10 ── Sheet Numbers — SHT value must match page number on ALL sheets
+        sht_status, sht_detail = _check_sheet_numbers(doc)
+
         # 10 ── Multi-sheet check: Doc No + CPY No on sheets 2+
         # Revision  → now handled by _check_revision (label-driven, all sheets)
         # Signatures → now handled by _check_signatures (all sheets)
@@ -347,7 +404,7 @@ def verify_pdf(pdf_bytes, filename, row):
 
         hard_fail = any(s == "FAIL" for s in [
             rev_status, sig_status, com_status, cls_status,
-            doc_status, cpy_status, proj_status, ttl_status
+            doc_status, cpy_status, proj_status, ttl_status, sht_status
         ])
         # Sheet mismatches across pages = FAIL
         if sheet_issues:
@@ -355,7 +412,7 @@ def verify_pdf(pdf_bytes, filename, row):
 
         all_pass = all(s == "PASS" for s in [
             doc_status, cpy_status, rev_status, sig_status, com_status,
-            cls_status, prev_status, ttl_status, proj_status
+            cls_status, prev_status, ttl_status, proj_status, sht_status
         ]) and not sheet_issues
 
         overall = "FAIL" if hard_fail else ("PASS" if all_pass else "WARN")
@@ -379,6 +436,7 @@ def verify_pdf(pdf_bytes, filename, row):
         if cls_status  == "FAIL": issues_parts.append(f"Classification missing on pages: {cls_missing}")
         if cls_status  == "WARN": issues_parts.append(f"Classification not found on pages: {cls_missing}")
         if proj_status == "FAIL": issues_parts.append(proj_detail)
+        if sht_status  == "FAIL": issues_parts.append(f"Sheet No error — {sht_detail}")
         if prev_status == "WARN": issues_parts.append("Prev rev not confirmed")
         if ttl_status  == "FAIL": issues_parts.append(ttl_display)
         if ttl_status  == "WARN": issues_parts.append("Title not confirmed")
@@ -405,6 +463,7 @@ def verify_pdf(pdf_bytes, filename, row):
             "classificationResult":      cls_status,
             "classificationMissingPages": cls_missing,
             "projNoResult":  proj_status,
+            "shtNoResult":   sht_status,
             "prevRevResult": prev_status,
             "titleMatch":    ttl_status,
             "overallResult": overall,
@@ -429,7 +488,7 @@ def _error_result(filename, row, error_msg):
         "sigsResult": "FAIL", "sigCount": 0,
         "commentsResult": "FAIL", "commentsCount": 0,
         "classificationResult": "FAIL", "classificationMissingPages": [],
-        "projNoResult": "FAIL",
+        "projNoResult": "FAIL", "shtNoResult": "FAIL",
         "prevRevResult": "FAIL", "titleMatch": "FAIL",
         "overallResult": "FAIL",
         "issues": f"Error: {error_msg}",
@@ -1078,7 +1137,7 @@ def generate_excel_report(results, transmittal_name=""):
     ws.title = "Verification"
     headers = ["Sr.", "Filename", "Doc No (Excel)", "Doc No Match",
                "CPY Match", "Rev Match", "Signatures", "Comments",
-               "Classification", "Project No", "Prev Rev", "Title", "RESULT", "Issues"]
+               "Classification", "Project No", "SHT No", "Prev Rev", "Title", "RESULT", "Issues"]
     for c, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=c, value=h)
         cell.fill = PatternFill("solid", fgColor="1F2937")
@@ -1098,13 +1157,14 @@ def generate_excel_report(results, transmittal_name=""):
             ws.cell(ri, 8,  r.get("commentsResult", "WARN"))
             ws.cell(ri, 9,  r.get("classificationResult", "WARN"))
             ws.cell(ri, 10, r.get("projNoResult", "WARN"))
-            ws.cell(ri, 11, r.get("prevRevResult", "WARN"))
-            ws.cell(ri, 12, r.get("titleMatch", "WARN"))
-            ws.cell(ri, 13, ov)
-            ws.cell(ri, 14, str(r.get("issues", "")))
+            ws.cell(ri, 11, r.get("shtNoResult", "WARN"))
+            ws.cell(ri, 12, r.get("prevRevResult", "WARN"))
+            ws.cell(ri, 13, r.get("titleMatch", "WARN"))
+            ws.cell(ri, 14, ov)
+            ws.cell(ri, 15, str(r.get("issues", "")))
             color = "1E8449" if ov=="PASS" else "C0392B" if ov=="FAIL" else "D68910"
-            ws.cell(ri, 13).fill = PatternFill("solid", fgColor=color)
-            ws.cell(ri, 13).font = Font(bold=True, color="FFFFFF")
+            ws.cell(ri, 14).fill = PatternFill("solid", fgColor=color)
+            ws.cell(ri, 14).font = Font(bold=True, color="FFFFFF")
         except Exception:
             pass   # never let one bad row break the whole report
     buf = BytesIO()
