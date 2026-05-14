@@ -188,7 +188,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .drop-area:hover { border-color: var(--navy); background: #eff6ff22; }
 .drop-area.drag-over { border-color: var(--amber); background: #fef9ec; }
 .drop-area.has-file { border-style: solid; border-color: var(--amber); background: #fef9ec; }
-.drop-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.drop-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; pointer-events: none; }
 .drop-ico {
   width: 36px; height: 36px; border-radius: 8px;
   background: var(--gray-100);
@@ -197,15 +197,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   transition: background .2s;
 }
 .drop-area.has-file .drop-ico { background: var(--amber-light); }
-.drop-name { font-size: 12px; font-weight: 500; color: var(--text); }
-.drop-sub { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.drop-name { font-size: 12px; font-weight: 500; color: var(--text); pointer-events: none; }
+.drop-sub { font-size: 10px; color: var(--text-muted); margin-top: 2px; pointer-events: none; }
 .drop-chip {
   display: inline-block; font-size: 10px;
   padding: 2px 9px; border-radius: 99px;
   background: var(--green-bg); color: #166534;
   margin-top: 6px;
 }
-.drop-hint { font-size: 10px; color: var(--text-light); margin-top: 6px; }
+.drop-hint { font-size: 10px; color: var(--text-light); margin-top: 6px; pointer-events: none; }
 
 /* Warn bar */
 .warn-bar {
@@ -773,24 +773,25 @@ function setFile(type, file) {
   const type = id.replace('-drop','');
   const inp  = document.getElementById(type + '-input');
 
-  // Click to open file dialog — stop propagation to avoid double-fire
-  el.addEventListener('click', e => {
-    e.stopPropagation();
-    inp.click();
-  });
+  // Click to open file dialog
+  el.addEventListener('click', () => inp.click());
 
-  // Drag events
-  el.ondragover  = e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); };
-  el.ondragenter = e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); };
-  el.ondragleave = e => { e.stopPropagation(); el.classList.remove('drag-over'); };
-  el.ondrop      = e => {
+  // Drag events — preventDefault is critical to stop browser navigating to file
+  el.addEventListener('dragover',  e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); });
+  el.addEventListener('dragenter', e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); });
+  el.addEventListener('dragleave', e => { e.stopPropagation(); el.classList.remove('drag-over'); });
+  el.addEventListener('drop', e => {
     e.preventDefault();
     e.stopPropagation();
     el.classList.remove('drag-over');
     const file = e.dataTransfer.files[0];
     if (file) setFile(type, file);
-  };
+  });
 });
+
+// Prevent browser from navigating if file dropped outside drop zones
+document.body.addEventListener('dragover', e => e.preventDefault());
+document.body.addEventListener('drop',     e => e.preventDefault());
 
 // Quick action bar upload buttons
 document.getElementById('qa-zip-btn').addEventListener('click',  () => document.getElementById('zip-input').click());
