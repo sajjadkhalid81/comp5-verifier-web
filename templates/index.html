@@ -577,7 +577,7 @@ tr:hover td { background: var(--gray-50); }
             <div id="zip-chip" style="display:none"><span class="drop-chip">✓ Ready to verify</span></div>
             <div class="drop-hint" style="color:#dc2626;font-weight:500;">⚠ Maximum 50 drawings per batch. The Excel transmittal must list the same drawings only (max 50 rows).</div>
           </div>
-          <input type="file" id="zip-input" accept=".zip" hidden>
+          <input type="file" id="zip-input" accept=".zip" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;">
         </div>
         <div>
           <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:7px;">Excel Transmittal (QG-NFPS sheet)</div>
@@ -591,7 +591,7 @@ tr:hover td { background: var(--gray-50); }
             </div>
             <div id="xlsx-chip" style="display:none"><span class="drop-chip">✓ Ready to verify</span></div>
           </div>
-          <input type="file" id="xlsx-input" accept=".xlsx,.xls" hidden>
+          <input type="file" id="xlsx-input" accept=".xlsx,.xls" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;">
         </div>
       </div>
       <div style="margin-top:12px;">
@@ -775,8 +775,6 @@ function setFile(type, file) {
 
   // Click to open file dialog
   el.addEventListener('click', () => inp.click());
-
-  // Drag events — preventDefault is critical to stop browser navigating to file
   el.addEventListener('dragover',  e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); });
   el.addEventListener('dragenter', e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); });
   el.addEventListener('dragleave', e => { e.stopPropagation(); el.classList.remove('drag-over'); });
@@ -797,7 +795,7 @@ document.body.addEventListener('drop',     e => e.preventDefault());
 document.getElementById('qa-zip-btn').addEventListener('click',  () => document.getElementById('zip-input').click());
 document.getElementById('qa-xlsx-btn').addEventListener('click', () => document.getElementById('xlsx-input').click());
 
-
+async function startVerification() {
   if (!zipFile || !xlsxFile) return;
   if (zipFile.size > 80 * 1024 * 1024) {
     if (!confirm(
@@ -1085,6 +1083,7 @@ function updateCharts(results) {
   document.getElementById('charts-section').style.display = 'grid';
 }
 
+async function downloadReport() {
   if (!currentJobId) return;
   const btns = document.querySelectorAll('[onclick="downloadReport()"]');
   btns.forEach(b => { b.textContent = '⏳ Preparing...'; b.disabled = true; });
