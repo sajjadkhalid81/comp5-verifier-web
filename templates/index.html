@@ -535,11 +535,11 @@ tr:hover td { background: var(--gray-50); }
 
   <!-- Quick actions -->
   <div class="qa-bar">
-    <button class="qa-btn primary" onclick="document.getElementById('zip-input').click()">
+    <button class="qa-btn primary" id="qa-zip-btn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
       Upload ZIP
     </button>
-    <button class="qa-btn primary" onclick="document.getElementById('xlsx-input').click()">
+    <button class="qa-btn primary" id="qa-xlsx-btn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
       Upload Excel
     </button>
@@ -566,7 +566,7 @@ tr:hover td { background: var(--gray-50); }
       <div class="upload-grid">
         <div>
           <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:7px;">ZIP File (drawings)</div>
-          <div class="drop-area" id="zip-drop" onclick="document.getElementById('zip-input').click()">
+          <div class="drop-area" id="zip-drop">
             <div class="drop-top">
               <div class="drop-ico">🗜️</div>
               <div>
@@ -581,7 +581,7 @@ tr:hover td { background: var(--gray-50); }
         </div>
         <div>
           <div style="font-size:11px;color:var(--text-muted);font-weight:500;margin-bottom:7px;">Excel Transmittal (QG-NFPS sheet)</div>
-          <div class="drop-area" id="xlsx-drop" onclick="document.getElementById('xlsx-input').click()">
+          <div class="drop-area" id="xlsx-drop">
             <div class="drop-top">
               <div class="drop-ico">📊</div>
               <div>
@@ -767,16 +767,36 @@ function setFile(type, file) {
   document.getElementById('qa-run-btn').disabled = !ready;
 }
 
-// Drag and drop
+// Drag and drop + click for both drop areas
 ['zip-drop','xlsx-drop'].forEach(id => {
   const el   = document.getElementById(id);
   const type = id.replace('-drop','');
-  el.ondragover  = e => { e.preventDefault(); el.classList.add('drag-over'); };
-  el.ondragleave = ()  => el.classList.remove('drag-over');
-  el.ondrop      = e  => { e.preventDefault(); el.classList.remove('drag-over'); setFile(type, e.dataTransfer.files[0]); };
+  const inp  = document.getElementById(type + '-input');
+
+  // Click to open file dialog — stop propagation to avoid double-fire
+  el.addEventListener('click', e => {
+    e.stopPropagation();
+    inp.click();
+  });
+
+  // Drag events
+  el.ondragover  = e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); };
+  el.ondragenter = e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); };
+  el.ondragleave = e => { e.stopPropagation(); el.classList.remove('drag-over'); };
+  el.ondrop      = e => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) setFile(type, file);
+  };
 });
 
-async function startVerification() {
+// Quick action bar upload buttons
+document.getElementById('qa-zip-btn').addEventListener('click',  () => document.getElementById('zip-input').click());
+document.getElementById('qa-xlsx-btn').addEventListener('click', () => document.getElementById('xlsx-input').click());
+
+
   if (!zipFile || !xlsxFile) return;
   if (zipFile.size > 80 * 1024 * 1024) {
     if (!confirm(
